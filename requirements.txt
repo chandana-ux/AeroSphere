@@ -1,0 +1,14 @@
+# Dashboard direct dependencies verified in the existing Python 3.11 environment.
+# This file does not replace the separately installed COLMAP/FFmpeg pipeline.
+streamlit==1.63.0
+plotly==7.0.0
+numpy==2.4.6
+pandas==3.0.5
+Pillow==12.3.0
+pyproj==3.7.2
+open3d==0.19.0
+opencv-python==5.0.0.93
+scipy==1.17.1
+matplotlib==3.11.2
+# Optional semantic inference reuses installed torch 2.13.0+cu130 and torchvision 0.28.0+cu130.
+# Preserve the existing compatible CUDA installation; no automatic torch reinstall.
