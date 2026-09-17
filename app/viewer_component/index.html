@@ -1,0 +1,20 @@
+<!doctype html><html><head><meta charset="utf-8"><script src="plotly.min.js"></script>
+<style>body{margin:0;background:#101820;color:#cad9e5;font:12px system-ui}#world{height:640px}#status{padding:0 12px}</style></head>
+<body><div id="world" aria-label="Interactive reconstructed 3D world"></div><div id="status">Drag to orbit · right drag to pan · scroll to zoom · click geometry to inspect evidence</div>
+<script>
+const world=document.getElementById('world');
+function send(type,extra){window.parent.postMessage({isStreamlitMessage:true,type,...extra},'*')}
+window.addEventListener('message',async event=>{
+ if(event.source!==window.parent||event.data.type!=='streamlit:render')return;
+ const args=event.data.args,fig=JSON.parse(args.figure);
+ await Plotly.react(world,fig.data,fig.layout,{responsive:true,displaylogo:false,scrollZoom:true,
+  modeBarButtonsToRemove:['sendDataToCloud','sendChartToCloud'],toImageButtonOptions:{filename:'aerosphere_world'}});
+ world.removeAllListeners('plotly_click');
+ world.on('plotly_click',event=>{const p=event.points[0];if(!p)return;
+  send('streamlit:setComponentValue',{value:{point_id:p.customdata||null,xyz:[p.x,p.y,p.z],layer:p.data.name,nonce:Date.now()},dataType:'json'});
+ });
+ send('streamlit:setFrameHeight',{height:670});
+});
+send('streamlit:componentReady',{apiVersion:1});
+send('streamlit:setFrameHeight',{height:670});
+</script></body></html>

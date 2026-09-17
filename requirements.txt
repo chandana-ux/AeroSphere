@@ -12,3 +12,6 @@ scipy==1.17.1
 matplotlib==3.11.2
 # Optional semantic inference reuses installed torch 2.13.0+cu130 and torchvision 0.28.0+cu130.
 # Preserve the existing compatible CUDA installation; no automatic torch reinstall.
+
+# Demo V1 reuses these versions; app/viewer_component/plotly.min.js is bundled.
+# No new dependencies and no runtime downloads. Torch weights must already be local.

@@ -61,3 +61,11 @@ secrets*
 *.key
 id_rsa*
 id_ed25519*
+
+/backups/
+/validation_input/
+/app/*.pre_v1.py
+/app/*.before_*.py
+/config/local.json
+/demo_mission.json
+/mission.json

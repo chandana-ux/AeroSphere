@@ -1,3 +1,54 @@
+# AeroSphere — Updated Demo V1
+
+The September 17 update preserves the original prototype and artifacts. Start
+with [DEMO_GUIDE.md](DEMO_GUIDE.md) for the new HOME → MISSION → FLIGHT → 3D WORLD
+→ EVIDENCE → TEMPORAL → INSIGHTS → EXPORT workflow.
+
+## Currently implemented in V1
+
+- Offline layered 3D viewer with orbit/pan/zoom, fit/reset, layer isolation,
+  camera trajectory and click-to-evidence lookup. Plotly JavaScript is bundled.
+- Exact reciprocal sparse-point lineage and source pixel inspection. Dense/mesh
+  clicks expose **nearest sparse context**, explicitly not surface provenance.
+- Observed image evidence, inferred geometry and unknown surfaces distinguished
+  without inventing missing geometry or confidence percentages.
+- Conservative mesh cleanup, computed normals and fused-cloud vertex colors in
+  a separate `mesh_display.ply`; the original geometry remains unchanged.
+- COLMAP automatic camera grouping (single-camera override and known-intrinsic
+  options), 1200-pixel dense processing by default, five stereo iterations,
+  bounded GPU/cache settings and configurable 800/1200/1600 dense resolution.
+- Persistent mission profiles, real mission library and mode-specific review
+  priorities; asynchronous analysis/reconstruction with cached reopening.
+- Landmark-aligned historical PLY comparison with explicit change-candidate
+  limitations; no genuine historical pair is supplied.
+- GPS camera distance, arbitrary model distance/triangle area, whole mesh area;
+  volume only for watertight orientable geometry. Physical height unavailable.
+- One ZIP export with full geometry, tracks, metadata, quality reports, mission
+  summary and source-artifact checksums. Source photos are not bundled.
+- Cached TorchVision inference loads local weights explicitly. No download at
+  runtime, even if a legacy caller passes `allow_download=True`.
+- Separate configurable GITHUB section using the repository's actual origin.
+  Cloud chart-sharing controls are removed from all user-facing charts.
+
+## Future / planned
+
+Exact dense/mesh per-surface lineage, field-validated metric accuracy, vertical
+georeferencing, timestamp-aligned IMU/RTK/PPK, aerial-specific semantic models,
+verified damage/new/removed-object classification, orthophoto/satellite/GIS
+comparison and validated single-pass video quality remain future work.
+
+## Tests and architecture
+
+Run `..\.venv\Scripts\python.exe -m unittest discover -s scripts -p "test_*.py" -v`.
+See DEMO_VALIDATION.md for results and limits. `app/legacy.py` retains original
+analytical views; `dashboard.py` composes the new workflow. `world.py`,
+`mission.py`, `temporal.py` and `measure.py` hold the new features. Old backup
+files and original model artifacts are retained. No changes are pushed to GitHub.
+
+The material below documents the original prototype; navigation and model
+loading details above supersede its earlier UI instructions.
+
+---
 # 🛰️ AeroSphere
 
 ## AI-Powered Single-Pass Aerial 3D Reconstruction & Spatial Intelligence
@@ -206,3 +257,4 @@ Both are the reconstruction references cited by the [official COLMAP project](ht
 - PPT / Product — [Name]
 - Design — [Name]
 - Presentation / Demo — [Name]
+

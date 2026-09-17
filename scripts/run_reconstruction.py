@@ -48,6 +48,10 @@ def main():
     parser.add_argument('--images', type=Path)
     parser.add_argument('--resume', type=Path, help='Existing run directory; reuse successful stages')
     parser.add_argument('--dense', action='store_true', help='Attempt bounded low-resolution dense reconstruction after sparse succeeds')
+    parser.add_argument('--camera-sharing', choices=['auto','single'], default='auto', help='Auto lets COLMAP group cameras from metadata; single requires a calibrated common camera')
+    parser.add_argument('--dense-size', type=int, choices=[800,1200,1600], default=1200, help='Bounded MVS image dimension; 1200 recommended for 4 GB GPU')
+    parser.add_argument('--camera-model', choices=['SIMPLE_RADIAL','OPENCV'], default='SIMPLE_RADIAL')
+    parser.add_argument('--camera-params', default='', help='Optional known intrinsics in COLMAP camera-model order')
     parser.add_argument('--cpu', action='store_true', help='CPU feature extraction/matching')
     parser.add_argument('--project', type=Path, default=project, help='Separate artifact root for new-input jobs')
     args = parser.parse_args()
@@ -65,8 +69,14 @@ def main():
     state_path = run / 'stages.json'
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
     config = dict(images=str(images.resolve()), colmap=str(args.colmap.resolve()), max_image_size=1600,
-                  max_features=8192, gpu=not args.cpu)
+                  max_features=8192, gpu=not args.cpu, camera_sharing=args.camera_sharing, camera_model=args.camera_model, camera_params=args.camera_params, dense_size=args.dense_size)
     config_path = run / 'config.json'
+    if config_path.exists():
+        old_config=json.loads(config_path.read_text())
+        if 'dense_size' not in old_config:
+            args.dense_size=800
+            args.camera_sharing='single'
+            config={key:config[key] for key in old_config}
     if config_path.exists() and json.loads(config_path.read_text()) != config:
         parser.error('Resume configuration differs; supply original image path/GPU options or start a fresh run')
     config_path.write_text(json.dumps(config, indent=2))
@@ -108,9 +118,9 @@ def main():
     sparse.mkdir(exist_ok=True)
     gpu = '0' if args.cpu else '1'
     command('features', 'feature_extractor', ['--database_path', db, '--image_path', images,
-        '--ImageReader.single_camera', '1', '--ImageReader.camera_model', 'SIMPLE_RADIAL',
+        '--ImageReader.single_camera', '1' if args.camera_sharing=='single' else '0', '--ImageReader.camera_model', args.camera_model,
         '--FeatureExtraction.max_image_size', '1600', '--FeatureExtraction.num_threads', '4',
-        '--FeatureExtraction.use_gpu', gpu, '--FeatureExtraction.gpu_index', '0', '--SiftExtraction.max_num_features', '8192'])
+        '--FeatureExtraction.use_gpu', gpu, '--FeatureExtraction.gpu_index', '0', '--SiftExtraction.max_num_features', '8192'] + (['--ImageReader.camera_params', args.camera_params] if args.camera_params else []))
     command('matching', 'exhaustive_matcher', ['--database_path', db, '--FeatureMatching.use_gpu', gpu,
         '--FeatureMatching.gpu_index', '0', '--FeatureMatching.num_threads', '4',
         '--FeatureMatching.max_num_matches', '8192', '--ExhaustiveMatching.block_size', '25'])
@@ -180,15 +190,15 @@ def main():
         dense.mkdir(exist_ok=True)
         try:
             command('undistort', 'image_undistorter', ['--image_path', images, '--input_path', model,
-                    '--output_path', dense, '--output_type', 'COLMAP', '--max_image_size', '800'])
+                    '--output_path', dense, '--output_type', 'COLMAP', '--max_image_size', args.dense_size])
             stereo_config = dense / 'stereo/patch-match.cfg'
             if not state.get('stereo', {}).get('success'):
                 lines = stereo_config.read_text().splitlines()
                 stereo_config.write_text('\n'.join('__auto__, 6' if line.strip().startswith('__auto__') else line for line in lines) + '\n')
             command('stereo', 'patch_match_stereo', ['--workspace_path', dense, '--workspace_format', 'COLMAP',
-                    '--PatchMatchStereo.max_image_size', '800', '--PatchMatchStereo.gpu_index', '0',
-                    '--PatchMatchStereo.geom_consistency', '0', '--PatchMatchStereo.num_iterations', '3',
-                    '--PatchMatchStereo.num_threads', '4', '--PatchMatchStereo.cache_size', '2'], timeout=1800)
+                    '--PatchMatchStereo.max_image_size', args.dense_size, '--PatchMatchStereo.gpu_index', '0',
+                    '--PatchMatchStereo.geom_consistency', '0', '--PatchMatchStereo.num_iterations', '5',
+                    '--PatchMatchStereo.num_threads', '4', '--PatchMatchStereo.cache_size', '1'], timeout=1800)
             command('fusion', 'stereo_fusion', ['--workspace_path', dense, '--workspace_format', 'COLMAP',
                     '--input_type', 'photometric', '--output_path', dense / 'fused.ply',
                     '--StereoFusion.num_threads', '4', '--StereoFusion.cache_size', '2'], timeout=600)
@@ -202,6 +212,8 @@ def main():
                 mesh = o3d.io.read_triangle_mesh(str(dense / 'mesh.ply'))
                 if not len(mesh.triangles) or not np.isfinite(np.asarray(mesh.vertices)).all():
                     raise RuntimeError('Mesh has no triangles or has nonfinite vertices')
+                from refine_mesh import refine
+                summary['mesh_display'] = refine(run)
                 summary['mesh_triangles'] = len(mesh.triangles)
                 summary['mesh_status'] = 'success' if len(mesh.triangles) else 'empty'
                 summary['mesh_caution'] = 'Poisson interpolation may bridge unobserved gaps; mesh is inferred, not validated surface truth.'

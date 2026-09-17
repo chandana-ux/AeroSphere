@@ -53,3 +53,33 @@ Test pose export:
 ```powershell
 & '..\.venv\Scripts\python.exe' scripts\test_reconstruction.py
 ```
+
+## Demo V1 update (2026-09-17)
+
+New runs default to COLMAP camera grouping from image metadata instead of
+forcing every image to one camera. Use `--camera-sharing single` only for a
+known common camera. `--camera-model` supports SIMPLE_RADIAL/OPENCV and
+`--camera-params` accepts optional known intrinsics in COLMAP parameter order.
+No calibration is invented. COLMAP still estimates/refines camera parameters.
+
+Dense stereo defaults to 1200 pixels, five photometric iterations, six source
+views and a 1 GB stereo cache. `--dense-size 800` lowers memory demand; 1600 is
+optional. Features remain bounded at 1600 pixels / 8192 requested features;
+matching uses 25-image blocks. CPU extraction/matching is available; dense
+PatchMatch requires CUDA. Sparse success survives a dense-stage failure.
+
+`refine_mesh.py RUN_DIRECTORY` writes `dense/mesh_display.ply` plus a JSON
+processing report. It removes duplicate/degenerate elements, computes normals
+and transfers nearest fused-point colors. It does not smooth, move vertices,
+fill holes, add triangles or replace the original mesh. Color distance is
+reported in model units and does not imply geometric evidence. No UV texture
+is generated. The viewer reports inferred surface geometry honestly.
+
+Existing resume configurations are retained at their original 800-pixel dense
+setting. New runs use unique directories. Completed stages are reused. Do not
+alter selected input files in-place between resumes.
+
+A fresh 18-image subset test completed with 10 images in its largest sparse
+component (two components total), 1,507 sparse points, 144,943 dense points and
+5,199 triangles. This validates execution, not complete coverage or improved
+accuracy. Full-dataset validation is recorded separately in DEMO_VALIDATION.md.

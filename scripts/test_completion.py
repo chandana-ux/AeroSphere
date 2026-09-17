@@ -82,8 +82,9 @@ class CompletionTests(unittest.TestCase):
         with patch('pandas.read_csv',side_effect=missing):
             app=AppTest.from_file(str(ROOT/'app/dashboard.py'),default_timeout=60).run()
             self.assertEqual(len(app.exception),0)
-            for page in ['Geospatial','Measurements']:
-                app.sidebar.radio[0].set_value(page).run()
+            app.sidebar.radio[0].set_value('3D WORLD').run()
+            for page in ['GEO','MEASURE']:
+                app.get('button_group')[0].set_value(page).run()
                 self.assertEqual(len(app.exception),0,str(app.exception))
         st.cache_data.clear()
 

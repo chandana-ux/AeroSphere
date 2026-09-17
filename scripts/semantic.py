@@ -4,11 +4,11 @@ import json
 from pathlib import Path
 
 
-def detect(image_path,project,allow_download=False,threshold=0.5):
+def detect(image_path,project,allow_download=False,threshold=0.5,model_root=None):
     project=Path(project);image_path=Path(image_path)
-    cache=project/'output/models/torch'
+    cache=Path(model_root or project)/'output/models/torch'
     expected=cache/'checkpoints/ssdlite320_mobilenet_v3_large_coco-a79551df.pth'
-    if not expected.exists() and not allow_download:
+    if not expected.exists():
         return {'status':'optional/unavailable','reason':'Pretrained weights are not cached; the core pipeline remains available.'}
     try:
         import torch
@@ -16,7 +16,9 @@ def detect(image_path,project,allow_download=False,threshold=0.5):
         from PIL import Image,ImageDraw
         torch.set_num_threads(4);torch.hub.set_dir(str(cache))
         weights=SSDLite320_MobileNet_V3_Large_Weights.DEFAULT
-        model=ssdlite320_mobilenet_v3_large(weights=weights).eval().cpu()
+        model=ssdlite320_mobilenet_v3_large(weights=None, weights_backbone=None)
+        model.load_state_dict(torch.load(expected, map_location='cpu', weights_only=True))
+        model=model.eval().cpu()
         with Image.open(image_path) as original:
             im=original.convert('RGB'); im.thumbnail((1280,1280))
         with torch.inference_mode():pred=model([weights.transforms()(im)])[0]

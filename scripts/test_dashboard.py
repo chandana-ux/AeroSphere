@@ -16,21 +16,19 @@ class DashboardTest(unittest.TestCase):
         app=AppTest.from_file(str(ROOT/'app/dashboard.py'),default_timeout=60).run()
         self.assertEqual(len(app.exception),0,str(app.exception))
         self.assertEqual(app.metric[0].value,'77')
-        for page in ['Imagery','Geospatial','3D Explorer','Quality & Coverage','Measurements','Semantic AI','Process New Input','Exports & Trust']:
+        for page in ['FLIGHT','3D WORLD','EVIDENCE','INSIGHTS','MISSION','TEMPORAL','EXPORT']:
             app.sidebar.radio[0].set_value(page).run()
             self.assertEqual(len(app.exception),0,f'{page}: {app.exception}')
-            if page=='Imagery':
-                app.radio(key='collection').set_value('Selected images').run()
+            if page=='FLIGHT':
+                next(x for x in app.selectbox if x.label=='Source frame').set_value('DSC00311.JPG').run()
                 self.assertEqual(len(app.exception),0,str(app.exception))
-                app.selectbox[0].set_value('DSC00311.JPG').run()
-                self.assertEqual(len(app.exception),0,str(app.exception))
-            if page=='3D Explorer':
-                for mode in ['Sparse point cloud','Mesh','Dense point cloud']:
-                    app.radio(key='representation').set_value(mode).run()
+            if page=='3D WORLD':
+                for mode in ['Sparse Cloud','Mesh','Dense Cloud']:
+                    next(x for x in app.selectbox if x.label=='Isolate layer').set_value(mode).run()
                     self.assertEqual(len(app.exception),0,str(app.exception))
-            if page=='Measurements':
-                first=app.selectbox[0].value
-                app.selectbox[1].set_value(first).run()
+                app.get('button_group')[0].set_value('MEASURE').run()
+                first=next(x for x in app.selectbox if x.label=='GPS point A').value
+                next(x for x in app.selectbox if x.label=='GPS point B').set_value(first).run()
                 self.assertEqual(app.metric[0].value,'0.00 m')
                 app.radio(key='measurement_source').set_value('Reconstruction points').run()
                 self.assertEqual(len(app.exception),0,str(app.exception))

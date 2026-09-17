@@ -1,3 +1,4 @@
+from ui import offline_chart
 """Coverage, optional semantic AI and isolated input processing dashboard pages."""
 import json
 import subprocess
@@ -13,6 +14,12 @@ import streamlit as st
 def render_extra(page,project,code_root,metadata,selection,summary):
     if page=='Quality & Coverage':
         st.subheader('Trust & approximate coverage')
+        metrics=st.columns(4)
+        metrics[0].metric('Registered images',f"{summary['registered_images']} / {summary['input_images']}")
+        metrics[1].metric('Sparse points',f"{summary['sparse_points']:,}")
+        metrics[2].metric('Dense points',f"{summary['dense_points']:,}" if 'dense_points' in summary else 'Unavailable')
+        metrics[3].metric('Mean reprojection error',f"{summary['mean_point_reprojection_error_pixels']:.3f} px")
+        st.caption('Reconstruction quality metrics. Independent field accuracy has not been measured.')
         path=project/'results/coverage/coverage_report.json'
         if not path.exists():st.info('Coverage report unavailable. Run the demo report command.');return
         coverage=json.loads(path.read_text())
@@ -30,7 +37,7 @@ def render_extra(page,project,code_root,metadata,selection,summary):
            hovertemplate='Points: %{customdata[0]}<br>Mean supporting views: %{customdata[1]:.1f}<extra></extra>'))
         fig.update_layout(template='plotly_dark',height=470,title='Approximate coverage · triangulated evidence distribution',
             xaxis_title='PCA plane X (model units)',yaxis_title='PCA plane Y (model units)',yaxis=dict(scaleanchor='x',scaleratio=1))
-        st.plotly_chart(fig,width='stretch')
+        offline_chart(fig,width='stretch')
         st.warning(coverage['limitations'])
         st.caption(coverage['grid_rules'])
         st.subheader('Viewpoint changes from reconstructed camera poses')
@@ -49,7 +56,7 @@ def render_extra(page,project,code_root,metadata,selection,summary):
         if st.button('Run cached pretrained model on this image'):
             sys.path.insert(0,str(code_root/'scripts'))
             from semantic import detect
-            with st.spinner('Running CPU detector…'):result=detect(Path(selection['source'])/name,project)
+            with st.spinner('Running CPU detector…'):result=detect(Path(selection['source'])/name,project,model_root=code_root)
             if result['status']!='available':st.warning(result['reason'])
         if saved.exists():
             result=json.loads(saved.read_text())
@@ -58,7 +65,7 @@ def render_extra(page,project,code_root,metadata,selection,summary):
             st.dataframe(pd.DataFrame(result['detections']),hide_index=True,width='stretch')
             st.warning(result['limitations'])
             st.download_button('Export predictions',saved.read_bytes(),file_name=saved.name)
-        else:st.caption('No detections are fabricated when a model or prediction is unavailable. Initial weight download is optional and separate from offline demo launch.')
+        else:st.caption('No predictions are available for this image. Inference uses only locally installed weights; runtime downloads are disabled.')
     elif page=='Process New Input':
         st.subheader('Process new input in a separate job')
         st.info('The Aukerman demo remains unchanged. Choose a local video or image-directory path; video is decoded sequentially instead of uploaded into browser memory.')
@@ -97,3 +104,4 @@ def render_extra(page,project,code_root,metadata,selection,summary):
                 log=job/'pipeline.log'
                 if log.exists():st.code(log.read_text(errors='replace')[-5000:],language='text')
                 if (job/'output/reconstruction/latest.json').exists():st.success('Reconstruction available. Reload the page and select this job in the Dataset control.')
+

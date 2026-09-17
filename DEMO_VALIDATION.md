@@ -1,3 +1,35 @@
+# Demo V1 validation — 2026-09-17
+
+## Verified before installation
+
+- Nine original baseline tests passed before editing the live project.
+- Nine new V1 tests passed: complete cached-mission navigation with socket
+  connections forbidden; empty-start navigation; exact reciprocal track integrity
+  and replay boundaries; malformed-track rejection; known-transform historical
+  alignment and change-candidate math; checksummed full-resolution ZIP exports;
+  missing-model behavior; cached real TorchVision inference with network denied;
+  model-space area; persistent mission profile roundtrip.
+- AppTest navigated all eight main pages plus GEO, MEASURE, coverage and replay.
+- Browser loaded the new Home and 3D World. Clicking actual mesh geometry opened
+  a nearby real sparse point with three recorded source observations and an
+  explicit proximity limitation. Exact sparse-ID selection is also available.
+- Fresh 18-image original-data run completed features, matching, sparse mapping,
+  dense stereo/fusion and mesh. Largest component: 10/18 cameras, 1,507 points;
+  two sparse components; 144,943 dense points; 5,199 triangles; mean error
+  0.758530 px. This subset does not demonstrate complete registration.
+- Full 77-image reconstruction is being validated separately. Do not infer its
+  outcome from the existing cached model or from the subset run.
+
+## Limits of these checks
+
+Network-denied tests block Python socket connections; they do not physically
+switch off Wi-Fi. Browser assets are local and cloud-share controls are removed.
+No real historical pair is installed; temporal math uses explicitly synthetic
+unit-test points, never presented as historical imagery. Field accuracy, height,
+RTK/PPK, damage classification and single-pass-video reconstruction quality are
+not validated. Mesh color is derived appearance, not UV texturing.
+
+## Original prototype validation (historical record)
 # AeroSphere dashboard validation — 2026-09-15
 
 Existing metadata, image selection and reconstruction were reused, not rebuilt.
@@ -31,3 +63,4 @@ Only Streamlit and its missing dependencies were installed; existing CV/reconstr
 The horizontal fit uses the visual camera plane. It is not a full 3D georeference; altitude-reference tags and independent control are missing. No validated metre-scale 3D surface measurement, height, area, volume, semantic accuracy, hidden-surface truth or continuous-drone-video reconstruction is claimed. The mesh contains coarse interpolated surfaces. Registration and evidence-grid density do not measure surface completeness. IMU/RTK/PPK/GCP integration remains optional future work.
 
 See README.md for the launch command, demo sequence and module descriptions.
+

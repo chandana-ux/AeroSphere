@@ -28,10 +28,6 @@ def main():
             sock.bind(('127.0.0.1',args.port))
         except OSError:
             raise SystemExit(f'Port {args.port} is already in use. Open an existing AeroSphere session, or use --port {args.port+1}.')
-    sys.path.insert(0,str(ROOT/'scripts'))
-    from pipeline import report
-    assessment=report(ROOT)
-    print(f'GPS assessment: {assessment["geospatial_assessment"]["status"]}',flush=True)
     url=f'http://127.0.0.1:{args.port}'
     print(f'AeroSphere demo: {url}\nPress Ctrl+C to stop. Existing reconstruction is reused.',flush=True)
     def open_when_ready():
@@ -48,7 +44,7 @@ def main():
     cmd=[sys.executable,'-m','streamlit','run',str(ROOT/'app/dashboard.py'),
          '--server.address','127.0.0.1','--server.port',str(args.port),'--server.headless','true',
          '--browser.gatherUsageStats','false','--server.fileWatcherType','none',
-         '--theme.base','dark','--theme.primaryColor','#56d6c3']
+         '--client.toolbarMode','minimal','--theme.base','dark','--theme.primaryColor','#56d6c3']
     process=subprocess.Popen(cmd,cwd=ROOT)
     try:
         raise SystemExit(process.wait())
