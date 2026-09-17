@@ -61,9 +61,13 @@ def render_world(root,summary,selection,metadata):
     left,right=st.columns([4.6,1.25],gap='medium')
     with right:
         st.markdown('#### MODEL')
-        mesh=st.checkbox('Mesh',True)
+        has_mesh=(run/'dense/mesh.ply').exists()
+        mesh=st.checkbox('Mesh',has_mesh)
         dense=st.checkbox('Dense Cloud',False)
-        sparse=st.checkbox('Sparse Cloud',False)
+        sparse=st.checkbox('Sparse Cloud',not has_mesh)
+        wire=st.checkbox('Wireframe',False,disabled=not has_mesh)
+        viewpoint=st.selectbox('Viewpoint',['Oblique','Top','Side'])
+        st.caption('Mesh uses vertex colors; UV texturing is not available.')
         show_cameras=st.checkbox('Cameras',True)
         trajectory=st.checkbox('Camera Trajectory',True)
         evidence=st.radio('Evidence',['Normal model','Evidence View'],label_visibility='collapsed')
@@ -95,6 +99,11 @@ def render_world(root,summary,selection,metadata):
                 color='#dca55e',name=label,flatshading=False,lighting=dict(ambient=.65,diffuse=.85,specular=.12,roughness=.85),
                 hovertemplate='Interpolated surface · click for nearby sparse evidence<extra></extra>'))
             counts.append(f'{len(triangles):,} triangles')
+            if wire:
+                edges=np.unique(np.sort(np.concatenate([triangles[:,[0,1]],triangles[:,[1,2]],triangles[:,[2,0]]]),axis=1),axis=0)
+                edge_points=xyz[edges[::max(1,len(edges)//25000)]]
+                lines=np.full((len(edge_points),3,3),np.nan);lines[:,:2]=edge_points;lines=lines.reshape(-1,3)
+                fig.add_trace(go.Scatter3d(x=lines[:,0],y=lines[:,1],z=lines[:,2],mode='lines',line=dict(color='#70dacf',width=1),name='Wireframe',hoverinfo='skip'))
         else:
             ix=np.linspace(0,len(xyz)-1,min(budget,len(xyz)),dtype=int)
             rgb=['rgb(%d,%d,%d)'%tuple(c) for c in (np.clip(colors[ix],0,1)*255).astype(int)] if len(colors) and evidence=='Normal model' else ('#5ed5dd' if ids else '#dca55e')
@@ -125,14 +134,16 @@ def render_world(root,summary,selection,metadata):
     if show_cameras or trajectory:all_xyz.append(visible_cameras[['x','y','z']].to_numpy())
     reference=np.concatenate(all_xyz) if all_xyz else cameras[['x','y','z']].to_numpy()
     lo=reference.min(0);hi=reference.max(0);span=np.maximum(hi-lo,1e-4);pad=span*.06
+    if viewpoint=='Top':eye=dict(x=0,y=0,z=2.3);up=dict(x=0,y=1,z=0)
+    elif viewpoint=='Side':eye=dict(x=2.3,y=0,z=.1);up=dict(x=0,y=0,z=1)
     revision=st.session_state.get('view_revision',0)+int(reset);st.session_state['view_revision']=revision
     axes={k:dict(range=[float(lo[i]-pad[i]),float(hi[i]+pad[i])],visible=False) for i,k in enumerate(('xaxis','yaxis','zaxis'))}
     fig.update_layout(height=640,paper_bgcolor='#101820',font=dict(color='#bdd0df'),margin=dict(l=0,r=0,t=0,b=0),
         scene=dict(**axes,aspectmode='data',bgcolor='#101820',camera=dict(eye=eye,up=up)),
-        legend=dict(orientation='h',y=.02,x=.02,bgcolor='rgba(16,24,32,.75)'),uirevision=f'{run}-{revision}')
+        legend=dict(orientation='h',y=.02,x=.02,bgcolor='rgba(16,24,32,.75)'),uirevision=f'{run}-{revision}-{viewpoint}')
     with left:
         event=_world(figure=fig.to_json(),key='world_'+str(root),default=None)
-        st.caption(' · '.join(counts)+'. Original resolution is retained in exports. Trajectory follows filename order.')
+        with st.expander('Display details'):st.caption(' · '.join(counts)+'. Original resolution is retained in exports. Trajectory follows filename order. Top/side are model-axis views, not geographic directions.')
     if event and event.get('nonce')!=st.session_state.get('world_event') and points and event.get('layer') not in ('Cameras','Camera Trajectory'):
         st.session_state['world_event']=event['nonce']
         pid=event.get('point_id');scope='Exact sparse-point observation track.'

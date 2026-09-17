@@ -36,13 +36,13 @@ class ImageIntelligenceTests(unittest.TestCase):
             summary = run(source, root / 'project', DEFAULTS)
             self.assertEqual(summary['exact_duplicates'], 1)
             self.assertEqual(summary['near_duplicates'], 1)
-            self.assertEqual(summary['selected_images'], 4)
+            self.assertEqual(summary['selected_images'], 3)
             self.assertEqual(summary['analysis_errors'], 1)
             self.assertEqual(before, {p.name: digest(p) for p in source.iterdir()})
             selected = Path(summary['selected_directory'])
             self.assertFalse((selected / '02.png').exists())
             self.assertTrue((selected / '03.png').exists())
-            self.assertTrue((selected / '05.png').exists())
+            self.assertFalse((selected / '05.png').exists())
             with self.assertRaises(ValueError):
                 run(source, source / 'unsafe', DEFAULTS)
 

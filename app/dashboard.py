@@ -6,10 +6,12 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 
 APP=Path(__file__).resolve().parent
 sys.path.insert(0,str(APP))
+from ingestion import save_uploads, frame_decisions
 from mission import MODES,catalog,profile,read_json,save_profile,package_mission
 from geo import assess
 from legacy import render_legacy
@@ -20,8 +22,8 @@ from temporal import render_temporal
 
 ROOT=Path(os.environ.get('AEROSPHERE_DATA_ROOT',APP.parent))
 CODE=APP.parent
-PAGES=['HOME','MISSION','FLIGHT','3D WORLD','EVIDENCE','TEMPORAL','INSIGHTS','EXPORT']
-st.set_page_config(page_title='AeroSphere | Demo V1',page_icon='◈',layout='wide',initial_sidebar_state='expanded',menu_items={'Get Help':None,'Report a bug':None,'About':'AeroSphere Demo V1 · local aerial reconstruction'})
+PAGES=['HOME','MISSION','FLIGHT INTELLIGENCE','RECONSTRUCTION','3D WORLD','INTELLIGENCE','EXPORT']
+st.set_page_config(page_title='AeroSphere | 3D Reconstruction & Spatial Intelligence',page_icon='◈',layout='wide',initial_sidebar_state='expanded',menu_items={'Get Help':None,'Report a bug':None,'About':'AeroSphere · From One Flight to a Trusted 3D World'})
 st.markdown('''<style>
 .stApp{background:#0d141c;color:#e1e9ef}[data-testid="stHeader"]{background:#0d141c}[data-testid="stToolbar"]{display:none}
 [data-testid="stSidebar"]{background:#111c27;border-right:1px solid #263441}
@@ -59,7 +61,7 @@ def mission_library(items):
             alt=int(meta.get('altitude_raw_m',pd.Series(dtype=float)).notna().sum())
             a.caption(f"{item['capture']} · {item['images']} images · GPS {len(gps)} · raw altitude {alt} · {location} · {item['status']}")
             def open_mission(path=item['root']):
-                st.session_state['active_root']=str(path);st.session_state['nav']='3D WORLD' if (path/'output/reconstruction/latest.json').exists() else 'FLIGHT'
+                st.session_state['active_root']=str(path);st.session_state['nav']='3D WORLD' if (path/'output/reconstruction/latest.json').exists() else 'FLIGHT INTELLIGENCE'
             b.button('Open mission',key='open_'+str(item['root']),on_click=open_mission)
 
 def setup(root,selection,meta):
@@ -77,24 +79,41 @@ def setup(root,selection,meta):
         st.write('GPS · '+('Available' if meta[['latitude','longitude']].notna().all(axis=1).any() else 'Unavailable'))
         st.write('Raw altitude · '+('Available; datum unverified' if meta.get('altitude_raw_m',pd.Series(dtype=float)).notna().any() else 'Unavailable'))
         st.caption('IMU / RTK / PPK · not supplied')
-    st.divider();st.markdown('#### INPUT')
-    st.caption('Analysis creates a separate mission and preserves the current reconstruction.')
-    with st.form('ingest'):
-        source=st.text_input('Video file or image folder',placeholder='Local source path')
-        with st.expander('Video sampling'):
-            interval=st.number_input('Sample interval (seconds)',min_value=.1,max_value=60.,value=2.)
-            cap=st.number_input('Maximum frames',min_value=3,max_value=1000,value=100)
-        submit=st.form_submit_button('Analyze flight',type='primary')
-    if submit:
-        path=Path(source.strip().strip('"'))
-        if not source.strip() or not path.exists():st.error('Select an existing image folder or video file.')
-        else:
+    st.divider();st.markdown('#### FLIGHT SOURCE')
+    source_type=st.radio('Input method',['UPLOAD DRONE VIDEO','UPLOAD IMAGE SEQUENCE','CONNECT DRONE'],horizontal=True)
+    if source_type=='CONNECT DRONE':
+        st.info('NO DRONE CONNECTED')
+        st.caption('Recorded drone video is ready to use. Live RTSP, SDK and timestamped telemetry require a hardware adapter; none is installed.')
+        return
+    is_video=source_type=='UPLOAD DRONE VIDEO'
+    uploaded=st.file_uploader('Drone video' if is_video else 'Image sequence',
+        type=['mp4','mov','avi','mkv'] if is_video else ['jpg','jpeg','png','tif','tiff'],
+        accept_multiple_files=not is_video,key='video_upload' if is_video else 'image_upload')
+    with st.expander('Use a file or folder already on this computer'):
+        source=st.text_input('Local video path' if is_video else 'Local image folder',key='source_path')
+    with st.expander('Frame sampling',expanded=is_video):
+        interval=st.number_input('Sample interval (seconds)',min_value=.1,max_value=60.,value=.5)
+        cap=st.number_input('Maximum frames',min_value=3,max_value=300,value=80)
+        st.caption('Samples are analyzed for sharpness, exposure, features and redundancy. A frame cap may shorten the processed flight.')
+    if st.button('Analyze flight',type='primary'):
+        try:
+            if uploaded:
+                path=save_uploads([uploaded] if is_video else uploaded,ROOT,video=is_video)
+            else:
+                path=Path(source.strip().strip('"'))
+                if not source.strip() or not path.exists():raise ValueError('Upload a file or select an existing local source.')
+                if is_video and not path.is_file():raise ValueError('Select a video file.')
+                if not is_video and not path.is_dir():raise ValueError('Select an image folder.')
             job=ROOT/'results/jobs'/datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S_%fZ')
             job.mkdir(parents=True);save_profile(job,name,mode)
+            (job/'job.json').write_text(json.dumps({'status':'queued','stage':'input','source':str(path)}))
             command=[sys.executable,str(CODE/'scripts/pipeline.py'),'--input',str(path.resolve()),'--job',str(job),'--interval',str(interval),'--max-frames',str(cap)]
             with (job/'worker.log').open('w') as log:subprocess.Popen(command,stdout=log,stderr=subprocess.STDOUT,cwd=CODE,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
             st.session_state['active_root']=str(job)
-            st.success('Flight analysis started. Open FLIGHT to follow progress.')
+            st.success('Flight analysis started.')
+            st.button('View frame analysis',on_click=go,args=('FLIGHT INTELLIGENCE',))
+        except (OSError,ValueError) as exc:st.error(str(exc))
+
 
 def flight(root,summary,selection,meta):
     job=read_json(root/'job.json')
@@ -105,44 +124,77 @@ def flight(root,summary,selection,meta):
     if not selection:
         st.info('Analyze an image folder or video in Mission setup. This page will show retained frames and selection reasons.')
         st.button('Back to Mission',on_click=go,args=('MISSION',));return
-    quality=pd.read_csv(Path(selection['report_directory'])/'image_quality.csv')
-    cols=st.columns(4)
-    for col,label,value in zip(cols,['Captured frames','Analyzed frames','Retained frames','Registered cameras'],[selection['input_images'],int((quality.status=='ok').sum()),selection['selected_images'],summary.get('registered_images','Not reconstructed')]):col.metric(label,value)
-    st.caption('Captured → analyzed → retained → reconstruction. No target rejection percentage.')
-    selected=st.selectbox('Source frame',quality.filename.tolist());row=quality[quality.filename==selected].iloc[0]
-    a,b=st.columns([2,1])
-    with a:
-        source=Path(selection['source'])/selected
-        if source.exists() and row.status=='ok':st.image(str(source),width='stretch')
-        else:st.info('Image unreadable or unavailable; its rejection reason remains recorded.')
-    with b:
-        st.markdown('#### '+('RETAINED' if str(row.selected).lower()=='true' else 'REJECTED'));st.write(str(row.reason).replace('_',' '))
+    quality=frame_decisions(root,selection)
+    video=read_json(root/'video_ingestion/video_metadata.json')
+    if video:
+        st.subheader('Input video')
+        cols=st.columns(4)
+        values=[f"{video.get('reported_duration_s',0):.1f} s" if video.get('reported_duration_s') else 'Unknown',f"{video.get('width')} × {video.get('height')}",video.get('fps') or 'Unknown',video.get('reported_frame_count') or 'Unknown']
+        for col,label,value in zip(cols,['Duration','Resolution','FPS','Source frames'],values):col.metric(label,value)
+        if video.get('warning'):st.warning(video['warning'])
+        with st.expander('Play source video'):
+            if Path(video['source']).exists():st.video(video['source'])
+    st.subheader('Useful evidence from your flight')
+    cols=st.columns(3)
+    for col,label,value in zip(cols,['Frames analyzed','Frames selected','Frames rejected'],[len(quality),int(quality.selected.sum()),int((~quality.selected).sum())]):col.metric(label,value)
+    timeline=quality.copy();timeline['position']=timeline.timestamp_s if video else range(len(timeline))
+    fig=px.scatter(timeline,x='position',y='decision',color='decision',hover_data=['filename','reason'],color_discrete_map={'Selected':'#58d6c3','Rejected':'#ed976a'})
+    fig.update_traces(marker=dict(size=11,symbol='square'))
+    fig.update_layout(height=180,margin=dict(l=0,r=0,t=5,b=0),xaxis_title='Video time (seconds)' if video else 'Image order',yaxis_title=None,showlegend=False,paper_bgcolor='#0d141c',plot_bgcolor='#111c27')
+    st.plotly_chart(fig,width='stretch',config={'displayModeBar':False})
+    st.caption('Selected frames retain useful overlap. Warnings are shown; no target rejection percentage is imposed.')
+    selected_rows=quality[quality.selected]
+    if len(selected_rows):
+        pages=max(1,(len(selected_rows)+11)//12)
+        page=int(st.number_input('Frame gallery page',min_value=1,max_value=pages,value=1,key='gallery_'+str(root)))
+        cols=st.columns(4)
+        for i,(_,row) in enumerate(selected_rows.iloc[(page-1)*12:page*12].iterrows()):
+            path=Path(selection['source'])/row.filename
+            if path.exists():
+                stamp=f'{row.timestamp_s:.2f}s · ' if pd.notna(row.timestamp_s) else ''
+                cols[i%4].image(str(path),caption=stamp+row.filename,width='stretch')
+    with st.expander('Inspect frame quality and selection reasons'):
+        selected=st.selectbox('Source frame',quality.filename.tolist());row=quality[quality.filename==selected].iloc[0]
+        a,b=st.columns([2,1]);source=Path(selection['source'])/selected
+        if source.exists() and row.status=='ok':a.image(str(source),width='stretch')
+        b.markdown('#### '+row.decision.upper());b.write(str(row.reason).replace('_',' '))
         fields=['blur_laplacian_variance','brightness_mean','contrast_std','dark_fraction','bright_fraction','orb_keypoints','information_score','warnings']
-        st.dataframe(row.reindex(fields).rename('Value').astype(str).replace('nan','Unavailable'))
-        st.caption('Information value is a relative heuristic, never a confidence percentage. Camera viewpoint changes are measured after reconstruction.')
-    with st.expander('All selection decisions'):st.dataframe(quality,hide_index=True,width='stretch')
+        b.dataframe(row.reindex(fields).rename('Value').astype(str).replace('nan','Unavailable'))
+        st.dataframe(quality,hide_index=True,width='stretch')
+    st.button('Continue to reconstruction',type='primary',on_click=go,args=('RECONSTRUCTION',))
+
+def reconstruction(root,summary,selection):
+    st.title('Reconstruct your flight')
+    st.write('Selected frames → Camera estimation → Sparse structure → Dense cloud → Mesh')
+    st.button('Refresh reconstruction status')
+    if not selection:
+        st.info('Analyze a video or image sequence first.');return
+    st.caption(f"{selection['selected_images']} selected source frames are ready. Processing stays on this computer.")
     state=read_json(root/'reconstruction_job.json')
-    if summary:
-        st.success('Reconstruction is cached and ready to inspect.');st.button('Open 3D World',type='primary',on_click=go,args=('3D WORLD',))
-    elif state.get('status')=='running':st.info('Reconstruction is running locally. Refresh to update. Sparse geometry is saved before dense processing.')
+    if state.get('status')=='running':st.info('Reconstruction is running locally. Refresh to update. Sparse geometry is saved before dense processing.')
+    elif summary:
+        st.success('Available geometry is ready to inspect.');st.button('Open 3D World',type='primary',on_click=go,args=('3D WORLD',))
+        if summary.get('dense_status') not in (None,'success'):st.warning('Dense processing did not complete; sparse output is available.')
+        with st.expander('Technical details'):st.json(summary)
     else:
         if state.get('status')=='failed':st.error('Reconstruction failed. Try additional overlapping, textured images. Diagnostics show the failing stage.')
         dense=st.checkbox('Build dense cloud and mesh',True);cpu=st.checkbox('CPU feature extraction and matching',False)
         st.caption('Dense stereo requires CUDA. CPU mode applies to feature extraction and matching only.')
-        if st.button('Run reconstruction',type='primary',disabled=selection['selected_images']<3):
+        if st.button('Start 3D reconstruction',type='primary',disabled=selection['selected_images']<3):
+            (root/'reconstruction_job.json').write_text(json.dumps({'status':'running','stage':'queued'}))
             command=[sys.executable,str(CODE/'scripts/reconstruct_job.py'),'--project',str(root)]
             if dense:command.append('--dense')
             if cpu:command.append('--cpu')
             with (root/'reconstruction_worker.log').open('w') as log:subprocess.Popen(command,stdout=log,stderr=subprocess.STDOUT,cwd=CODE,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
             st.success('Reconstruction started. Refresh to follow the stages.')
     with st.expander('Engineering diagnostics'):
-        st.json(job or state)
+        st.json(state)
         for p in (root/'pipeline.log',root/'reconstruction_worker.log'):
             if p.exists():st.code(p.read_text(errors='replace')[-4000:])
 
 def main():
     items=catalog(ROOT)
-    st.sidebar.markdown('## ◈ AEROSPHERE');st.sidebar.caption('DEMO V1 / MISSION CONTROL')
+    st.sidebar.markdown('## ◈ AEROSPHERE');st.sidebar.caption('FLIGHT OPERATIONS')
     page=st.sidebar.radio('Workspace',PAGES,key='nav',label_visibility='collapsed');st.sidebar.divider()
     active=Path(st.session_state.get('active_root',ROOT))
     if not active.exists():active=ROOT
@@ -166,47 +218,45 @@ def main():
     st.caption('AEROSPHERE / '+page+' / '+mission['name'])
     if page!='HOME':
         a,b=st.columns([1,8]);a.button('← Back',on_click=go,args=(PAGES[max(0,PAGES.index(page)-1)],))
-        b.caption('NEXT · '+{'MISSION':'Analyze input','FLIGHT':'Inspect retained evidence, then reconstruct','3D WORLD':'Explore geometry and source observations','EVIDENCE':'Inspect support and gaps','TEMPORAL':'Add a genuine historical observation','INSIGHTS':'Review priorities and uncertainty','EXPORT':'Save the mission package'}[page])
+        b.caption('VIDEO → FRAME INTELLIGENCE → RECONSTRUCTION → 3D WORLD')
     if page=='HOME':
-        st.markdown('<div class="hero"><div class="eyebrow">SINGLE-PASS AERIAL RECONSTRUCTION</div><h1>From One Flight<br>to a Trusted 3D World.</h1><p>Explore what was reconstructed. Inspect the observations behind it. Understand what remains unknown.</p></div>',unsafe_allow_html=True)
-        a,b,c=st.columns(3);a.button('Start new mission',type='primary',on_click=go,args=('MISSION',),width='stretch')
+        st.markdown('<div class="hero"><div class="eyebrow">SINGLE-PASS AERIAL RECONSTRUCTION</div><h1>From One Flight<br>to a Trusted 3D World.</h1><p>One drone video. Useful source frames. A real 3D world you can inspect.</p></div>',unsafe_allow_html=True)
+        a,b,c=st.columns(3);a.button('New mission',type='primary',on_click=go,args=('MISSION',),width='stretch')
         def demo():
-            preferred=read_json(ROOT/'demo_mission.json').get('root',str(ROOT))
+            preferred=read_json(ROOT/'demo_mission.json').get('root',str(next((m['root'] for m in items if m['status']=='3D ready'),ROOT)))
             st.session_state['active_root']=preferred if Path(preferred).exists() else str(ROOT)
             go('3D WORLD')
-        b.button('Open demo mission',on_click=demo,width='stretch',disabled=not (ROOT/'output/reconstruction/latest.json').exists())
+        b.button('Open demo mission',on_click=demo,width='stretch',disabled=not any(m['status']=='3D ready' for m in items))
         c.button('Mission library',on_click=lambda:st.session_state.update(show_library=True),width='stretch')
         if st.session_state.get('show_library'):
             mission_library(items)
             st.button('Back to overview',on_click=lambda:st.session_state.update(show_library=False))
             return
-        if summary:
-            cols=st.columns(4)
-            for col,label,value in zip(cols,['Registered cameras','Sparse points','Dense points','Mean reprojection error'],[summary['registered_images'],f"{summary['sparse_points']:,}",f"{summary['dense_points']:,}" if 'dense_points' in summary else 'Unavailable',f"{summary['mean_point_reprojection_error_pixels']:.3f} px"]):col.metric(label,value)
-            preview=Path(summary['run_directory'])/'dense_view.png'
-            if preview.exists():st.image(str(preview),caption='Actual reconstructed cloud · open 3D World to inspect',width='stretch')
-            st.caption('Photograph-based demonstration. Reconstruction metrics do not establish field accuracy or validate single-pass video performance.')
-        mission_library(items)
+        st.markdown('**DRONE VIDEO**　→　**SELECTED FRAMES**　→　**RECONSTRUCTION**　→　**SPATIAL INTELLIGENCE**')
     elif page=='MISSION':setup(active,selection,meta)
-    elif page=='FLIGHT':flight(active,summary,selection,meta)
+    elif page=='FLIGHT INTELLIGENCE':flight(active,summary,selection,meta)
+    elif page=='RECONSTRUCTION':reconstruction(active,summary,selection)
     elif not summary or not selection:
-        st.info('No completed reconstruction yet. Analyze input in Mission, then run reconstruction from Flight.');st.button('Open Flight',on_click=go,args=('FLIGHT',))
+        st.info('No completed reconstruction yet. Analyze input in Mission, then run reconstruction from Flight.');st.button('Open Flight',on_click=go,args=('FLIGHT INTELLIGENCE',))
     elif page=='3D WORLD':
-        st.title('3D World');section=st.segmented_control('World view',['3D','GEO','MEASURE'],default='3D')
+        st.title('3D World');section=st.segmented_control('World view',['3D','GEO','MEASURE','HISTORICAL'],default='3D')
         if section=='3D':render_world(active,summary,selection,meta)
         elif section=='GEO':render_legacy('Geospatial',active,CODE)
+        elif section=='HISTORICAL':
+            st.caption('CURRENT FLIGHT ONLY · historical data remains separate')
+            with st.expander('Add historical context'):render_temporal(active,summary)
         else:
             measurement=st.radio('Measurement tool',['Point distance / GPS','Surface / model-space'],horizontal=True)
             if measurement=='Point distance / GPS':render_legacy('Measurements',active,CODE)
             else:
                 from measure import render_model_measure
                 render_model_measure(summary)
-    elif page=='EVIDENCE':
-        choice=st.segmented_control('Evidence workspace',['LINEAGE & REPLAY','QUALITY & COVERAGE'],default='LINEAGE & REPLAY')
-        if choice=='LINEAGE & REPLAY':render_lineage(active,summary,selection)
-        else:render_extra('Quality & Coverage',active,CODE,meta,selection,summary)
-    elif page=='TEMPORAL':render_temporal(active,summary)
-    elif page=='INSIGHTS':
+    elif page=='INTELLIGENCE':
+        choice=st.segmented_control('Intelligence workspace',['EVIDENCE','QUALITY & COVERAGE','MISSION INSIGHTS'],default='EVIDENCE')
+        if choice=='EVIDENCE':
+            render_lineage(active,summary,selection);return
+        if choice=='QUALITY & COVERAGE':
+            render_extra('Quality & Coverage',active,CODE,meta,selection,summary);return
         mode=mission.get('mode','RECONNAISSANCE');st.title(mode.title());st.write(MODES[mode][0])
         priorities={'INFRASTRUCTURE':['Inspect structures in the mesh','Check supporting frames around inspection areas','Review road visibility manually'],
                     'DISASTER ASSESSMENT':['Compare genuine historical observations','Inspect access routes in source imagery','Record unobserved regions; damage/debris detection unavailable'],
@@ -214,7 +264,6 @@ def main():
                     'URBAN MAPPING':['Inspect building/road context manually','Review GPS positions and model extent','Check coverage before mapping conclusions']}
         for item in priorities[mode]:st.write('• '+item)
         st.caption('Generic COCO detection does not identify buildings, roads, vegetation, damage or debris. Specialized aerial models are planned.')
-        st.button('Review mission evidence',on_click=go,args=('TEMPORAL' if mode=='DISASTER ASSESSMENT' else 'EVIDENCE',))
         render_extra('Semantic AI',active,CODE,meta,selection,summary)
     elif page=='EXPORT':
         st.title('Export mission package');st.write('Full-resolution geometry, camera trajectory, GPS metadata, exact sparse tracks, quality reports and mission summary in one ZIP.')

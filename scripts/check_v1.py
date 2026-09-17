@@ -4,7 +4,7 @@ from pathlib import Path
 from streamlit.testing.v1 import AppTest
 root=Path(__file__).resolve().parents[1]
 app=AppTest.from_file(str(root/'app/dashboard.py'),default_timeout=90).run()
-for page in ['HOME','MISSION','FLIGHT','3D WORLD','EVIDENCE','TEMPORAL','INSIGHTS','EXPORT']:
+for page in ['HOME','MISSION','FLIGHT INTELLIGENCE','RECONSTRUCTION','3D WORLD','INTELLIGENCE','EXPORT']:
     app.sidebar.radio[0].set_value(page).run()
     assert not app.exception,(page,str(app.exception))
     assert not app.error,(page,[e.value for e in app.error])
@@ -15,7 +15,7 @@ for page in ['HOME','MISSION','FLIGHT','3D WORLD','EVIDENCE','TEMPORAL','INSIGHT
             assert not app.exception,(view,str(app.exception))
             assert not app.error,(view,[e.value for e in app.error])
             print('PASS',view,flush=True)
-    if page=='EVIDENCE':
+    if page=='INTELLIGENCE':
         app.slider[0].set_value(1).run()
         assert app.metric[0].value=='0'
         app.slider[0].set_value(77).run()

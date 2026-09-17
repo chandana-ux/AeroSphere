@@ -138,7 +138,9 @@ def run(source, project, cfg):
             metrics, gray, points, descriptors = analyze(path, cfg)
             row.update(metrics)
             current = (gray, points, descriptors)
-            if row['sha256'] in hashes:
+            if row['orb_keypoints']==0 and row['contrast_std']<2:
+                row.update(reason='unusable_featureless_frame')
+            elif row['sha256'] in hashes:
                 row.update(reason='exact_duplicate', duplicate_of=hashes[row['sha256']])
             else:
                 for reference, data in reversed(recent):
@@ -175,7 +177,7 @@ def run(source, project, cfg):
         source=str(source), selected_directory=str(selected), report_directory=str(report), config=cfg,
         notes=['Filename order is used, not a verified flight chronology.',
                'Scores are heuristic ranks, not confidence probabilities or validated reconstruction quality.',
-               'Quality warnings do not discard potentially necessary overlap.',
+               'Featureless near-uniform frames are rejected; other quality warnings preserve potentially necessary overlap.',
                'Near-duplicate comparisons use recent retained images; exact hashes are checked globally.',
                'Pixel/feature displacement does not estimate camera pose or prove viewpoint diversity.',
                'All retained image copies are SHA-256 verified. No source images are modified.'])

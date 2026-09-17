@@ -64,18 +64,18 @@ class V1Tests(unittest.TestCase):
     def test_empty_start_and_navigation_offline(self):
         with tempfile.TemporaryDirectory() as d,patch.dict(os.environ,{'AEROSPHERE_DATA_ROOT':d}),patch.object(socket.socket,'connect',side_effect=AssertionError('Network forbidden')):
             app=AppTest.from_file(str(CODE/'app/dashboard.py'),default_timeout=90).run()
-            for page in ['HOME','MISSION','FLIGHT','3D WORLD','EVIDENCE','TEMPORAL','INSIGHTS','EXPORT']:
+            for page in ['HOME','MISSION','FLIGHT INTELLIGENCE','RECONSTRUCTION','3D WORLD','INTELLIGENCE','EXPORT']:
                 app.sidebar.radio[0].set_value(page).run()
                 self.assertFalse(app.exception,str(app.exception));self.assertFalse(app.error,[e.value for e in app.error])
 
     def test_cached_mission_navigation_offline(self):
         with patch.dict(os.environ,{'AEROSPHERE_DATA_ROOT':str(DATA)}),patch.object(socket.socket,'connect',side_effect=AssertionError('Network forbidden')):
             app=AppTest.from_file(str(CODE/'app/dashboard.py'),default_timeout=90).run()
-            for page in ['HOME','MISSION','FLIGHT','3D WORLD','EVIDENCE','TEMPORAL','INSIGHTS','EXPORT']:
+            for page in ['HOME','MISSION','FLIGHT INTELLIGENCE','RECONSTRUCTION','3D WORLD','INTELLIGENCE','EXPORT']:
                 app.sidebar.radio[0].set_value(page).run()
                 self.assertFalse(app.exception,str(app.exception));self.assertFalse(app.error,[e.value for e in app.error])
             app.sidebar.radio[0].set_value('HOME').run()
-            self.assertEqual(app.metric[0].value,'77')
+            self.assertEqual(len(app.metric),0)  # Home emphasizes the workflow, not reconstruction counts.
 
     def test_missing_model_never_downloads(self):
         from semantic import detect

@@ -1,5 +1,7 @@
 # Demo V1 validation — 2026-09-17
 
+This is the earlier V1 validation record. The final video-first build, 21-test result and real drone-video reconstruction are documented in [FINAL_VALIDATION.md](FINAL_VALIDATION.md). Navigation and Home metrics described below are historical.
+
 ## Verified before installation
 
 - Nine original baseline tests passed before editing the live project.
@@ -17,8 +19,9 @@
   dense stereo/fusion and mesh. Largest component: 10/18 cameras, 1,507 points;
   two sparse components; 144,943 dense points; 5,199 triangles; mean error
   0.758530 px. This subset does not demonstrate complete registration.
-- Full 77-image reconstruction is being validated separately. Do not infer its
-  outcome from the existing cached model or from the subset run.
+- The subsequent 77-image run completed: 77 registered cameras, 29,449 sparse
+  points, 1,222,389 dense points and 50,959 triangles. The final priority build
+  additionally reconstructs a real video; see FINAL_VALIDATION.md.
 
 ## Limits of these checks
 

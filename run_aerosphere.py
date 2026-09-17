@@ -1,5 +1,6 @@
 """One-command local demo launcher; never reruns reconstruction."""
 import argparse
+import json
 import importlib.util
 import socket
 import subprocess
@@ -12,6 +13,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 PYTHON = ROOT.parent / '.venv/Scripts/python.exe'
+local = ROOT / 'config/local.json'
+if local.exists():
+    PYTHON = Path(json.loads(local.read_text(encoding='utf-8-sig')).get('python',str(PYTHON)))
+elif (ROOT / '.venv/Scripts/python.exe').exists():
+    PYTHON = ROOT / '.venv/Scripts/python.exe'
 
 
 def main():

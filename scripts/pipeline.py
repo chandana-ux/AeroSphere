@@ -67,7 +67,9 @@ def process(source,job=None,interval=2,max_frames=300,reconstruct=False,dense=Fa
     base=(ROOT/'results/jobs').resolve()
     if job.parent!=base:raise ValueError('Jobs must be immediate children of results/jobs')
     job.mkdir(parents=True,exist_ok=True)
-    if (job/'job.json').exists():raise ValueError('Job already exists; create a new job')
+    if (job/'job.json').exists():
+        previous=json.loads((job/'job.json').read_text())
+        if previous.get('status')!='queued':raise ValueError('Job already exists; create a new job')
     state=dict(status='processing',source=str(source),job=str(job),stage='input',started_utc=datetime.now(timezone.utc).isoformat())
     def save(): (job/'job.json').write_text(json.dumps(state,indent=2))
     def run(args):

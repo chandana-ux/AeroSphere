@@ -15,11 +15,11 @@ class DashboardTest(unittest.TestCase):
     def test_pages_and_measurements(self):
         app=AppTest.from_file(str(ROOT/'app/dashboard.py'),default_timeout=60).run()
         self.assertEqual(len(app.exception),0,str(app.exception))
-        self.assertEqual(app.metric[0].value,'77')
-        for page in ['FLIGHT','3D WORLD','EVIDENCE','INSIGHTS','MISSION','TEMPORAL','EXPORT']:
+        self.assertEqual(len(app.metric),0)  # Home emphasizes the workflow, not reconstruction counts.
+        for page in ['FLIGHT INTELLIGENCE','RECONSTRUCTION','3D WORLD','INTELLIGENCE','MISSION','EXPORT']:
             app.sidebar.radio[0].set_value(page).run()
             self.assertEqual(len(app.exception),0,f'{page}: {app.exception}')
-            if page=='FLIGHT':
+            if page=='FLIGHT INTELLIGENCE':
                 next(x for x in app.selectbox if x.label=='Source frame').set_value('DSC00311.JPG').run()
                 self.assertEqual(len(app.exception),0,str(app.exception))
             if page=='3D WORLD':
