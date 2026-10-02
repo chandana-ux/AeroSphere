@@ -70,8 +70,17 @@ def process(source,job=None,interval=2,max_frames=300,reconstruct=False,dense=Fa
     if (job/'job.json').exists():
         previous=json.loads((job/'job.json').read_text())
         if previous.get('status')!='queued':raise ValueError('Job already exists; create a new job')
-    state=dict(status='processing',source=str(source),job=str(job),stage='input',started_utc=datetime.now(timezone.utc).isoformat())
-    def save(): (job/'job.json').write_text(json.dumps(state,indent=2))
+    state=dict(status='processing',source=str(source),job=str(job),stage='input',started_utc=datetime.now(timezone.utc).isoformat(),reconstruction_requested=bool(reconstruct),dense_requested=bool(dense))
+    def save():
+        (job/'job.json').write_text(json.dumps(state,indent=2))
+        recon_status = job/'reconstruction_job.json'
+        if reconstruct:
+            recon_state = {'status': 'running' if state.get('status') == 'processing' else state.get('status'),
+                           'stage': state.get('stage',''),
+                           'started_utc': state.get('started_utc'),
+                           'finished_utc': state.get('finished_utc')}
+            if state.get('error'): recon_state['error'] = state['error']
+            recon_status.write_text(json.dumps(recon_state,indent=2))
     def run(args):
         with (job/'pipeline.log').open('a') as log:
             subprocess.run([sys.executable,*map(str,args)],stdout=log,stderr=subprocess.STDOUT,check=True)

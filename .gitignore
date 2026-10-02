@@ -11,9 +11,10 @@ __pycache__/
 *.egg-info/
 build/
 dist/
-# Editors, OS and temporary files
+# Editors, operating systems and temporary files
 .idea/
 .vscode/
+.vs/
 .DS_Store
 Thumbs.db
 Desktop.ini
@@ -22,19 +23,31 @@ Desktop.ini
 *.bak
 *.swp
 *.log
-# Local data and generated artifacts (documentation screenshots are intentional)
+# Local inputs, uploads and generated workspaces
 /input/
 /frames/
 /selected_frames/
 /metadata/
 /output/
-/results/
 /datasets/
 /uploads/
 /models/
-*.db
-*.db-*
-*.sqlite*
+
+# Ignore generated results except the real deployment demo assets.
+/results/*
+!/results/dense/
+/results/dense/*
+!/results/dense/mesh.ply
+!/results/camera_trajectory.csv
+**/dense_test/
+**/database.db
+**/database.db-*
+**/*.sqlite
+**/*.sqlite3
+**/colmap_cache/
+**/tmp/
+
+# Generated geometry and model weights, except the whitelisted demo mesh above.
 *.ply
 *.las
 *.laz
@@ -50,6 +63,7 @@ Desktop.ini
 *.mov
 *.mkv
 *.zip
+!/results/dense/mesh.ply
 # Secrets and local authentication
 .env
 .env.*
@@ -64,6 +78,9 @@ id_ed25519*
 
 /backups/
 /validation_input/
+/ScreenCamera_*.json
+/ScreenCapture_*.png
+/mesh_camera_check.html
 /app/*.pre_v1.py
 /app/*.before_*.py
 /config/local.json

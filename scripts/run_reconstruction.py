@@ -3,6 +3,7 @@ import argparse
 import csv
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import time
@@ -44,7 +45,10 @@ def read_model(folder):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     project = Path(__file__).resolve().parents[1]
-    parser.add_argument('--colmap', type=Path, default=Path.home() / 'Downloads/colmap-x64-windows-cuda/COLMAP.bat')
+    default_colmap = os.environ.get('AEROSPHERE_COLMAP') or shutil.which('colmap')
+    if not default_colmap and os.name == 'nt':
+        default_colmap = str(Path.home() / 'Downloads/colmap-x64-windows-cuda/COLMAP.bat')
+    parser.add_argument('--colmap', type=Path, default=Path(default_colmap) if default_colmap else Path('colmap'))
     parser.add_argument('--images', type=Path)
     parser.add_argument('--resume', type=Path, help='Existing run directory; reuse successful stages')
     parser.add_argument('--dense', action='store_true', help='Attempt bounded low-resolution dense reconstruction after sparse succeeds')
@@ -168,7 +172,11 @@ def main():
         summary['dense_status'] = 'running'
     def save():
         (run / 'summary.json').write_text(json.dumps(summary, indent=2))
-        (project / 'output/reconstruction/latest.json').write_text(json.dumps(summary, indent=2))
+        latest_path = run / 'latest.json'
+        if not args.resume:
+            latest_path = project / 'output/reconstruction/latest.json'
+            latest_path.parent.mkdir(parents=True, exist_ok=True)
+        latest_path.write_text(json.dumps(summary, indent=2))
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -195,8 +203,13 @@ def main():
             if not state.get('stereo', {}).get('success'):
                 lines = stereo_config.read_text().splitlines()
                 stereo_config.write_text('\n'.join('__auto__, 6' if line.strip().startswith('__auto__') else line for line in lines) + '\n')
+            # Force COLMAP 4.2 PatchMatch onto its stable CPU mode instead of GPU 0.
+            # The project was hard-coding `--PatchMatchStereo.gpu_index 0`, which is the
+            # CUDA path that can crash on Windows with exit code 0xC0000409 after writing
+            # several photometric depth maps. In COLMAP 4.2, `gpu_index=-1` is the non-GPU
+            # option and is the correct stable invocation for this dense stage.
             command('stereo', 'patch_match_stereo', ['--workspace_path', dense, '--workspace_format', 'COLMAP',
-                    '--PatchMatchStereo.max_image_size', args.dense_size, '--PatchMatchStereo.gpu_index', '0',
+                    '--PatchMatchStereo.max_image_size', args.dense_size, '--PatchMatchStereo.gpu_index', '-1',
                     '--PatchMatchStereo.geom_consistency', '0', '--PatchMatchStereo.num_iterations', '5',
                     '--PatchMatchStereo.num_threads', '4', '--PatchMatchStereo.cache_size', '1'], timeout=1800)
             command('fusion', 'stereo_fusion', ['--workspace_path', dense, '--workspace_format', 'COLMAP',
