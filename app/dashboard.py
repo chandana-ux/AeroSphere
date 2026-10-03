@@ -70,41 +70,39 @@ def data(root):
 
 def read_artifact_stats(run_dir):
     stats = {'FRAMES': 'N/A', 'SPARSE': 'N/A', 'DENSE': 'N/A', 'MESH': 'N/A', 'COORDINATE': 'RELATIVE', 'STATUS': 'READY'}
-    try:
-        import open3d as o3d
-    except Exception:
-        o3d = None
-
-    if run_dir.exists():
-        sparse_path = run_dir / 'sparse.ply'
-        dense_path = run_dir / 'dense/fused.ply'
-        mesh_path = run_dir / 'dense/mesh.ply'
-
-        if sparse_path.exists() and o3d is not None:
-            try:
-                cloud = o3d.io.read_point_cloud(str(sparse_path))
-                stats['SPARSE'] = f"{len(cloud.points):,.0f}"
-            except Exception:
-                pass
-
-        if dense_path.exists() and o3d is not None:
-            try:
-                cloud = o3d.io.read_point_cloud(str(dense_path))
-                stats['DENSE'] = f"{len(cloud.points):,.0f}"
-            except Exception:
-                pass
-
-        if mesh_path.exists() and o3d is not None:
-            try:
-                mesh = o3d.io.read_triangle_mesh(str(mesh_path))
-                verts = len(mesh.vertices)
-                faces = len(mesh.triangles)
-                stats['MESH'] = f"{faces:,.0f} TRIANGLES"
-                stats['MESH_VERTICES'] = f"{verts:,.0f} VERTICES"
-            except Exception:
-                pass
+    for label, path, element in (
+        ('SPARSE', run_dir / 'sparse.ply', b'vertex'),
+        ('DENSE', run_dir / 'dense/fused.ply', b'vertex'),
+        ('MESH', run_dir / 'dense/mesh.ply', b'face'),
+    ):
+        counts = ply_header_counts(path)
+        count = counts.get(element)
+        if count is not None:
+            stats[label] = f'{count:,}' + (' TRIANGLES' if label == 'MESH' else '')
+        if label == 'MESH' and counts.get(b'vertex') is not None:
+            stats['MESH_VERTICES'] = f"{counts[b'vertex']:,} VERTICES"
 
     return stats
+
+
+def ply_header_counts(path):
+    counts = {}
+    try:
+        with path.open('rb') as stream:
+            if stream.readline().strip() != b'ply':
+                return counts
+            for line in stream:
+                if line.strip() == b'end_header':
+                    break
+                fields = line.split()
+                if len(fields) == 3 and fields[0] == b'element':
+                    try:
+                        counts[fields[1]] = int(fields[2])
+                    except ValueError:
+                        continue
+    except OSError:
+        pass
+    return counts
 
 
 def project_status(active, summary, selection):
@@ -212,12 +210,18 @@ def setup(root, selection, meta):
             st.error(str(exc))
 
     st.markdown('<div class="thin-divider"></div>', unsafe_allow_html=True)
+    job_state = read_json(root / 'reconstruction_job.json')
+    gps = meta.dropna(subset=['latitude', 'longitude'])
+    video_path = root / 'video_ingestion/video_metadata.json'
+    source_kind = 'DRONE VIDEO' if video_path.is_file() else ('IMAGE SEQUENCE' if selection else 'NOT ANALYZED')
+    mission_status = 'AVAILABLE' if summary else job_state.get('status', 'PENDING').upper()
+    input_count = selection.get('input_images') if selection else None
     status_summary = [
-        ('Mission status', 'READY'),
-        ('Source', 'Aerial survey'),
-        ('Input', 'Image sequence / drone capture'),
-        ('Reconstruction', 'AVAILABLE' if summary else 'PENDING'),
-        ('Georeference', 'NOT AVAILABLE'),
+        ('Mission', current.get('name', root.name)),
+        ('Source', source_kind),
+        ('Input frames', f'{input_count:,}' if input_count is not None else 'NOT ANALYZED'),
+        ('Reconstruction', mission_status),
+        ('GPS fixes', f'{len(gps):,}' if len(gps) else 'UNAVAILABLE'),
     ]
     cards = st.columns(len(status_summary))
     for col, (label, value) in zip(cards, status_summary):
@@ -225,17 +229,24 @@ def setup(root, selection, meta):
             st.markdown(f'''<div class="summary-card"><span class="label">{label}</span><div class="value">{value}</div></div>''', unsafe_allow_html=True)
 
     st.markdown('<div class="thin-divider"></div>', unsafe_allow_html=True)
-    st.markdown('<div class="compact-label" style="margin-bottom: 0.6rem;">Mission pipeline</div>', unsafe_allow_html=True)
-    stages = ['CAPTURE', 'FRAME INTELLIGENCE', 'SfM', 'DENSE MVS', 'MESH', '3D WORLD']
-    cols = st.columns(len(stages))
-    for col, label in zip(cols, stages):
+    st.markdown('<div class="compact-label" style="margin-bottom: 0.6rem;">Project readiness</div>', unsafe_allow_html=True)
+    mesh_present = (Path(summary.get('run_directory', root / 'results')) / 'dense/mesh.ply').is_file()
+    if not mesh_present and root.resolve() == CODE.resolve():
+        mesh_present = (CODE / 'results/dense/mesh.ply').is_file()
+    readiness = [
+        ('FRAME INTELLIGENCE', 'AVAILABLE' if selection else 'PENDING', 'Selected source frames and quality evidence'),
+        ('3D ARTIFACTS', 'AVAILABLE' if summary or mesh_present else 'PENDING', 'Reconstruction summary or mesh file'),
+        ('GPS METADATA', 'AVAILABLE' if len(gps) else 'UNAVAILABLE', f'{len(gps):,} records; model georeferencing remains separate'),
+    ]
+    cols = st.columns(len(readiness))
+    for col, (label, value, detail) in zip(cols, readiness):
         with col:
-            st.markdown(f'''<div class="pipeline-step"><div class="step-number">{label}</div><div class="step-name">{label}</div><div class="step-meta">Ready</div></div>''', unsafe_allow_html=True)
+            st.markdown(f'''<div class="pipeline-step"><div class="step-number">{label}</div><div class="step-name">{value}</div><div class="step-meta">{detail}</div></div>''', unsafe_allow_html=True)
 
     st.markdown('<div class="thin-divider"></div>', unsafe_allow_html=True)
     telemetry = st.columns(4)
     with telemetry[0]:
-        st.metric('Frames', f"{selection.get('selected_images', 0):,}" if selection else '0')
+        st.metric('Frames', f"{selection.get('selected_images', 0):,}" if selection else 'N/A')
     with telemetry[1]:
         st.metric('Sparse points', f"{int(summary.get('sparse_points', 0)):,}" if summary and summary.get('sparse_points') is not None else 'N/A')
     with telemetry[2]:
@@ -346,26 +357,105 @@ def flight(root, summary, selection, meta):
 
 def reconstruction(root, summary, selection):
     st.markdown('<div class="workspace-panel"><div class="compact-label">Reconstruction / pipeline</div></div>', unsafe_allow_html=True)
-    if not selection:
-        st.info('Analyze a video or image sequence first.')
-        return
-
     state = read_json(root / 'reconstruction_job.json')
+    summary = summary or {}
+    run_dir = Path(summary.get('run_directory', root / 'results'))
+    sparse_path = run_dir / 'sparse.ply'
+    dense_path = run_dir / 'dense/fused.ply'
+    mesh_path = run_dir / 'dense/mesh.ply'
+    if not mesh_path.is_file() and root.resolve() == CODE.resolve():
+        demo_mesh = CODE / 'results/dense/mesh.ply'
+        if demo_mesh.is_file():
+            mesh_path = demo_mesh
+
+    sparse_header = ply_header_counts(sparse_path)
+    dense_header = ply_header_counts(dense_path)
+    mesh_header = ply_header_counts(mesh_path)
+
+    def count_text(value):
+        return f'{int(value):,}' if value is not None else 'N/A'
+
+    selected_images = selection.get('selected_images') if selection else None
+    registered = summary.get('registered_images')
+    sparse_points = summary.get('sparse_points')
+    if sparse_points is None:
+        sparse_points = sparse_header.get(b'vertex')
+    dense_points = summary.get('dense_points')
+    if dense_points is None:
+        dense_points = dense_header.get(b'vertex')
+    mesh_vertices = summary.get('mesh_vertices')
+    if mesh_vertices is None:
+        mesh_vertices = mesh_header.get(b'vertex')
+    mesh_triangles = summary.get('mesh_triangles')
+    if mesh_triangles is None:
+        mesh_triangles = mesh_header.get(b'face')
+
+    sparse_available = sparse_path.is_file() or sparse_points is not None
+    dense_available = dense_path.is_file() or (dense_points is not None and summary.get('dense_status') in ('success', 'available'))
+    mesh_available = mesh_path.is_file() or (mesh_triangles is not None and int(mesh_triangles) > 0)
+    job_status = state.get('status')
+    sparse_status = 'AVAILABLE' if sparse_available else ('RUNNING' if job_status == 'running' else 'FAILED' if job_status == 'failed' else 'PENDING')
+    dense_status = summary.get('dense_status')
+    if dense_available:
+        dense_state = 'AVAILABLE'
+    elif dense_status == 'running':
+        dense_state = 'RUNNING'
+    elif dense_status == 'failed':
+        dense_state = 'FAILED'
+    elif job_status == 'failed' and not sparse_available:
+        dense_state = 'BLOCKED'
+    else:
+        dense_state = 'PENDING'
+    mesh_status = summary.get('mesh_status')
+    if mesh_available:
+        mesh_state = 'AVAILABLE'
+    elif mesh_status == 'running':
+        mesh_state = 'RUNNING'
+    elif mesh_status in ('failed', 'empty'):
+        mesh_state = 'FAILED'
+    elif dense_status == 'failed':
+        mesh_state = 'BLOCKED'
+    else:
+        mesh_state = 'PENDING'
+
+    registered_text = count_text(registered)
+    if selected_images is not None:
+        registered_text += f' / {int(selected_images):,} selected'
+    camera_file = run_dir / 'camera_trajectory.csv'
+    if not camera_file.is_file() and root.resolve() == CODE.resolve() and run_dir == root / 'results':
+        camera_file = CODE / 'results/camera_trajectory.csv'
+    camera_text = 'Camera positions recorded' if camera_file.is_file() else 'Camera positions unavailable'
     stages = [
-        ('01 INPUT', 'Source ready', 'Image sequence / video'),
-        ('02 FRAME INTELLIGENCE', 'Quality review', f"{selection.get('selected_images', 0):,} selected"),
-        ('03 CAMERA / SfM', 'Registered' if summary else 'Awaiting SfM', f"{summary.get('registered_images', 0) if summary else 0} / {summary.get('registered_images', 0) if summary else 0} registered" if summary else 'Awaiting output'),
-        ('04 DENSE MVS', 'Available' if summary and summary.get('dense_status') in (None, 'success', 'available') else 'Awaiting output', f"{int(summary.get('dense_points', 0)):,} points" if summary and summary.get('dense_points') is not None else 'No dense cloud yet'),
-        ('05 SURFACE', 'Available' if (root / 'output/reconstruction/latest.json').exists() else 'Awaiting mesh', f"{int(summary.get('mesh_triangles', 0)):,} triangles" if summary and summary.get('mesh_triangles') is not None else 'Mesh pending'),
-        ('06 3D WORLD', 'Rendered', 'Active scene')
+        ('01 · SPARSE RECONSTRUCTION', sparse_state,
+         'Image features are matched across views to estimate camera poses and triangulate supported 3D points.',
+         f'Registered images: {registered_text} · Sparse points: {count_text(sparse_points)} · {camera_text}'),
+        ('02 · DENSE RECONSTRUCTION', dense_state,
+         'Multi-view stereo uses the estimated cameras to densify observed surfaces; it builds on the sparse alignment.',
+         f'Dense points: {count_text(dense_points)} · Processing: {dense_status or "not recorded"}'),
+        ('03 · MESH GENERATION', mesh_state,
+         'The dense cloud is converted to an inspectable triangle surface; interpolated faces are estimates, not ground truth.',
+         f'Vertices: {count_text(mesh_vertices)} · Triangles: {count_text(mesh_triangles)}'),
     ]
 
-    cols = st.columns(len(stages))
-    for col, (index, status, metric) in zip(cols, stages):
+    st.markdown('<div class="compact-label" style="margin: 0.8rem 0 0.6rem;">Three-stage reconstruction workflow</div>', unsafe_allow_html=True)
+    cols = st.columns(3)
+    for col, (label, status, description, metric) in zip(cols, stages):
         with col:
-            st.markdown(f'''<div class="pipeline-step"><div class="step-number">{index}</div><div class="step-name">{status}</div><div class="step-meta">{metric}</div></div>''', unsafe_allow_html=True)
+            st.markdown(
+                f'''<div class="pipeline-step" data-state="{status}">
+                    <div class="step-number">{label}</div>
+                    <div class="stage-state">{status}</div>
+                    <div class="step-description">{description}</div>
+                    <div class="step-meta">{metric}</div>
+                </div>''',
+                unsafe_allow_html=True,
+            )
 
     st.markdown('<div class="thin-divider"></div>', unsafe_allow_html=True)
+    if not selection:
+        st.info('Analyze an image folder or video in Mission setup. Stage indicators above reflect only saved reconstruction artifacts and job status.')
+        return
+
     if state.get('status') == 'running':
         st.info('Reconstruction is running locally. Refresh to update. Sparse geometry is saved before dense processing.')
     elif summary:

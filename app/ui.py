@@ -13,29 +13,33 @@ def apply_workspace_theme():
         """
         <style>
         :root {
-            --aero-bg: #071219;
-            --aero-bg-strong: #0c171d;
-            --aero-panel: #0d1a22;
-            --aero-panel-strong: #101f2a;
-            --aero-border: rgba(148, 177, 196, 0.18);
-            --aero-border-strong: rgba(122, 183, 206, 0.38);
-            --aero-text: #edf6ff;
-            --aero-text-soft: #bfd0db;
-            --aero-text-muted: #7c92a2;
-            --aero-accent: #6ac7d8;
-            --aero-accent-soft: #56e0c4;
-            --aero-warn: #d5a467;
-            --aero-danger: #ff8b8b;
-            --aero-surface: rgba(12, 22, 29, 0.95);
+            --aero-bg: #091116;
+            --aero-bg-strong: #0d171c;
+            --aero-panel: #111c22;
+            --aero-panel-strong: #17242a;
+            --aero-border: rgba(164, 187, 190, 0.16);
+            --aero-border-strong: rgba(103, 217, 203, 0.42);
+            --aero-text: #eef3ef;
+            --aero-text-soft: #bfceca;
+            --aero-text-muted: #81938f;
+            --aero-accent: #67d9cb;
+            --aero-accent-soft: #8ce1c0;
+            --aero-warn: #e7b36f;
+            --aero-danger: #ed8d80;
+            --aero-surface: rgba(15, 25, 30, 0.96);
         }
 
         html, body, [data-testid="stAppViewContainer"] {
             background: var(--aero-bg);
             color: var(--aero-text);
+            font-family: "Bahnschrift", "Aptos", "Segoe UI", sans-serif;
         }
 
         .stApp {
-            background: linear-gradient(180deg, #071319 0%, #0b171f 100%);
+            background-color: var(--aero-bg);
+            background-image: linear-gradient(180deg, rgba(30, 57, 58, 0.16), transparent 260px),
+                              repeating-linear-gradient(0deg, transparent 0 39px, rgba(177, 208, 204, 0.018) 40px),
+                              linear-gradient(180deg, #0b151a 0%, #091116 100%);
             color: var(--aero-text);
         }
 
@@ -50,9 +54,9 @@ def apply_workspace_theme():
         }
 
         [data-testid="stSidebar"] {
-            background: rgba(10, 17, 22, 0.98);
+            background: rgba(11, 19, 23, 0.98);
             border-right: 1px solid var(--aero-border);
-            width: 260px !important;
+            width: 250px !important;
         }
 
         [data-testid="stSidebarContent"] {
@@ -60,7 +64,7 @@ def apply_workspace_theme():
         }
 
         [data-testid="stMainBlockContainer"] {
-            padding: 0.45rem 1.1rem 1rem;
+            padding: 0.55rem 1.25rem 1.2rem;
             max-width: 1900px;
         }
 
@@ -119,8 +123,8 @@ def apply_workspace_theme():
 
         .workspace-header-title {
             margin: 0;
-            font-size: clamp(1.2rem, 1.8vw, 2rem);
-            letter-spacing: -0.04em;
+            font-size: 1.65rem;
+            letter-spacing: 0;
             line-height: 1.1;
             font-weight: 700;
             color: var(--aero-text);
@@ -147,7 +151,7 @@ def apply_workspace_theme():
             align-items: center;
             gap: 0.55rem;
             padding: 0.5rem 0.7rem;
-            border-radius: 999px;
+            border-radius: 4px;
             border: 1px solid var(--aero-border-strong);
             background: rgba(11, 25, 31, 0.8);
             color: var(--aero-text-soft);
@@ -165,9 +169,9 @@ def apply_workspace_theme():
         }
 
         .workspace-panel {
-            background: rgba(12, 21, 28, 0.9);
+            background: rgba(15, 25, 30, 0.9);
             border: 1px solid var(--aero-border);
-            border-radius: 0.85rem;
+            border-radius: 6px;
             padding: 0.9rem 0.95rem;
             box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
         }
@@ -181,9 +185,9 @@ def apply_workspace_theme():
         }
 
         .context-panel {
-            background: rgba(12, 20, 28, 0.8);
+            background: rgba(15, 24, 29, 0.82);
             border: 1px solid var(--aero-border);
-            border-radius: 0.8rem;
+            border-radius: 6px;
             padding: 0.8rem 0.85rem;
         }
 
@@ -229,7 +233,7 @@ def apply_workspace_theme():
         .metric-value {
             font-size: 1.1rem;
             font-weight: 700;
-            letter-spacing: -0.04em;
+            letter-spacing: 0;
             color: var(--aero-text);
         }
 
@@ -268,11 +272,13 @@ def apply_workspace_theme():
         }
 
         .stButton > button {
-            border-radius: 0.6rem;
+            border-radius: 4px;
             border: 1px solid var(--aero-border-strong);
-            background: rgba(14, 27, 34, 0.8);
+            background: rgba(20, 34, 39, 0.88);
             color: var(--aero-text);
             padding: 0.52rem 0.8rem;
+            font-weight: 600;
+            transition: background 0.15s ease, border-color 0.15s ease;
         }
 
         .stButton > button:hover {
@@ -281,9 +287,32 @@ def apply_workspace_theme():
         }
 
         .stButton > button[kind="primary"] {
-            background: linear-gradient(180deg, rgba(70, 154, 184, 0.22), rgba(92, 196, 188, 0.12));
+            background: linear-gradient(180deg, rgba(63, 160, 145, 0.28), rgba(47, 116, 109, 0.2));
             border-color: rgba(106, 199, 216, 0.5);
             color: var(--aero-text);
+        }
+
+        [data-testid="stMetric"] {
+            background: rgba(16, 27, 32, 0.72);
+            border: 1px solid var(--aero-border);
+            border-radius: 5px;
+            padding: 0.7rem 0.8rem;
+        }
+
+        [data-testid="stMetricLabel"] p {
+            color: var(--aero-text-muted);
+            font-size: 0.72rem;
+        }
+
+        [data-testid="stMetricValue"] {
+            color: var(--aero-text);
+            font-size: 1.35rem;
+        }
+
+        [data-testid="stExpander"] {
+            border-color: var(--aero-border);
+            border-radius: 5px;
+            background: rgba(14, 24, 29, 0.55);
         }
 
         [data-testid="stSidebarNav"] {
@@ -333,9 +362,10 @@ def apply_workspace_theme():
 
         .summary-card {
             border: 1px solid var(--aero-border);
-            background: rgba(11, 20, 27, 0.9);
-            border-radius: 0.65rem;
+            background: rgba(16, 27, 32, 0.88);
+            border-radius: 5px;
             padding: 0.75rem 0.8rem;
+            min-height: 5.3rem;
         }
 
         .summary-card .label {
@@ -350,8 +380,9 @@ def apply_workspace_theme():
         .summary-card .value {
             font-size: 1.2rem;
             font-weight: 700;
-            letter-spacing: -0.04em;
+            letter-spacing: 0;
             color: var(--aero-text);
+            overflow-wrap: anywhere;
         }
 
         .pipeline-rail {
@@ -363,10 +394,11 @@ def apply_workspace_theme():
 
         .pipeline-step {
             border: 1px solid var(--aero-border);
-            background: rgba(10, 20, 25, 0.9);
-            border-radius: 0.6rem;
+            background: rgba(16, 27, 32, 0.88);
+            border-radius: 5px;
             padding: 0.6rem 0.65rem;
-            min-height: 86px;
+            min-height: 110px;
+            height: 100%;
         }
 
         .pipeline-step .step-number {
@@ -387,14 +419,45 @@ def apply_workspace_theme():
             margin-top: 0.2rem;
             font-size: 0.68rem;
             color: var(--aero-text-soft);
+            line-height: 1.45;
+        }
+
+        .pipeline-step .step-description {
+            margin-top: 0.45rem;
+            color: var(--aero-text-muted);
+            font-size: 0.75rem;
+            line-height: 1.5;
+        }
+
+        .pipeline-step .stage-state {
+            display: inline-block;
+            margin-top: 0.45rem;
+            padding: 0.18rem 0.38rem;
+            border: 1px solid var(--aero-border-strong);
+            border-radius: 3px;
+            color: var(--aero-accent);
+            font-size: 0.58rem;
+            font-weight: 700;
+            letter-spacing: 0.1em;
+        }
+
+        .pipeline-step[data-state="PENDING"] .stage-state,
+        .pipeline-step[data-state="BLOCKED"] .stage-state {
+            border-color: var(--aero-border);
+            color: var(--aero-text-muted);
+        }
+
+        .pipeline-step[data-state="FAILED"] .stage-state {
+            border-color: rgba(237, 141, 128, 0.5);
+            color: var(--aero-danger);
         }
 
         .world-hero {
             border: 1px solid var(--aero-border);
-            border-radius: 0.9rem;
+            border-radius: 6px;
             background: rgba(7, 14, 19, 0.8);
             overflow: hidden;
-            min-height: 730px;
+            min-height: 790px;
         }
 
         .world-hero .stPlotlyChart {
@@ -406,6 +469,31 @@ def apply_workspace_theme():
             letter-spacing: 0.18em;
             text-transform: uppercase;
             color: var(--aero-text-muted);
+        }
+
+        @media (max-width: 800px) {
+            [data-testid="stMainBlockContainer"] {
+                padding: 0.45rem 0.75rem 1rem;
+            }
+
+            .workspace-header {
+                align-items: flex-start;
+                flex-direction: column;
+                gap: 0.6rem;
+            }
+
+            .workspace-header-left {
+                flex-wrap: wrap;
+            }
+
+            .workspace-header-title {
+                font-size: 1.35rem;
+                overflow-wrap: anywhere;
+            }
+
+            .world-hero {
+                min-height: 0;
+            }
         }
         </style>
         """,

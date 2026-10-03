@@ -56,14 +56,12 @@ def render_inspector(summary,selection,pid,metadata=None):
 
 def _scene_camera_from_bounds(bounds, mode='initial'):
     if bounds is None:
-        return {'eye': {'x': 1.5, 'y': 1.5, 'z': 1.2}, 'center': {'x': 0.0, 'y': 0.0, 'z': 0.0}, 'up': {'x': 0.0, 'y': 0.0, 'z': 1.0}}
-    min_bound, max_bound = np.asarray(bounds[0], dtype=float), np.asarray(bounds[1], dtype=float)
-    center = (min_bound + max_bound) / 2.0
+        bounds = (np.array([-1.0, -1.0, -1.0]), np.array([1.0, 1.0, 1.0]))
     if mode == 'fit':
-        eye = np.array([1.1, 1.1, 1.0], dtype=float)
+        eye = np.array([2.0, 2.0, 1.65], dtype=float)
     else:
-        eye = np.array([1.5, 1.5, 1.2], dtype=float)
-    return {'eye': {'x': float(eye[0]), 'y': float(eye[1]), 'z': float(eye[2])}, 'center': {'x': float(center[0]), 'y': float(center[1]), 'z': float(center[2])}, 'up': {'x': 0.0, 'y': 0.0, 'z': 1.0}}
+        eye = np.array([1.6, 1.6, 1.25], dtype=float)
+    return {'eye': {'x': float(eye[0]), 'y': float(eye[1]), 'z': float(eye[2])}, 'center': {'x': 0.0, 'y': 0.0, 'z': 0.0}, 'up': {'x': 0.0, 'y': 0.0, 'z': 1.0}}
 
 
 def render_world(root,summary,selection,metadata):
@@ -132,13 +130,15 @@ def render_world(root,summary,selection,metadata):
     </div>
     ''', unsafe_allow_html=True)
 
-    left,right=st.columns([3.3,1.0],gap='small')
+    left,right=st.columns([4.2,1.15],gap='small')
     with right:
         st.markdown('<div class="compact-label">View</div>', unsafe_allow_html=True)
-        has_mesh=(run/'dense/mesh.ply').exists()
+        has_mesh=mesh_path.exists()
+        has_dense=dense_path.exists()
+        has_sparse=(run/'sparse.ply').exists() or bool(points)
         mesh=st.checkbox('Mesh', value=True if has_mesh else False, key='world_mesh_toggle')
-        dense=st.checkbox('Dense', value=False, key='world_dense_toggle')
-        sparse=st.checkbox('Sparse', value=False, key='world_sparse_toggle')
+        dense=st.checkbox('Dense cloud', value=False, key='world_dense_toggle', disabled=not has_dense)
+        sparse=st.checkbox('Sparse cloud', value=False, key='world_sparse_toggle', disabled=not has_sparse)
         wire=st.checkbox('Wireframe', value=False, key='world_wireframe_toggle', disabled=not has_mesh)
         st.markdown('<div class="compact-label" style="margin-top:0.7rem;">Overlays</div>', unsafe_allow_html=True)
         show_cameras=st.checkbox('Cameras', value=False, key='world_cameras_toggle', disabled=cameras.empty)
@@ -161,13 +161,13 @@ def render_world(root,summary,selection,metadata):
         st.caption('Native model units · geographic up unverified')
         if evidence=='Evidence View':st.caption('Cyan: sparse estimates with recorded observations. Amber: dense/mesh estimates. Unknown surfaces are absent, not fabricated.')
     fig=go.Figure();all_xyz=[];counts=[]
-    mesh_center_display = None
+    model_origin = np.zeros(3, dtype=float)
     if mesh_bounds is not None:
-        mesh_center_display = (mesh_bounds[0] + mesh_bounds[1]) / 2.0
+        model_origin = (mesh_bounds[0] + mesh_bounds[1]) / 2.0
     for enabled,label,relative,is_mesh in [(mesh,'Mesh','dense/mesh_display.ply',True),(dense,'Dense Cloud','dense/fused.ply',False),(sparse or evidence=='Evidence View','Sparse Cloud','sparse.ply',False)]:
         if not enabled or isolate not in ('All enabled',label):continue
         path=run/relative
-        if is_mesh and not path.exists():path=run/'dense/mesh.ply'
+        if is_mesh and not path.exists():path=mesh_path
         if not path.exists():
             with left:st.info(label+' is not available for this reconstruction.')
             continue
@@ -176,7 +176,7 @@ def render_world(root,summary,selection,metadata):
         if label=='Sparse Cloud' and points:
             ids=list(points);xyz=np.array([points[i]['xyz'] for i in ids]);colors=np.empty((0,3))
         else:ids=None
-        display_xyz = xyz - mesh_center_display if mesh_center_display is not None else xyz
+        display_xyz = xyz - model_origin
         print(f'PLOTLY_COORDS={label}: x_range=({float(display_xyz[:,0].min())},{float(display_xyz[:,0].max())}), y_range=({float(display_xyz[:,1].min())},{float(display_xyz[:,1].max())}), z_range=({float(display_xyz[:,2].min())},{float(display_xyz[:,2].max())})')
         all_xyz.append(display_xyz)
         if is_mesh:
@@ -198,21 +198,22 @@ def render_world(root,summary,selection,metadata):
                 customdata=[ids[i] for i in ix] if ids else None,marker=dict(size=1.7,color=rgb),name=label,
                 hovertemplate='Click to inspect supporting evidence<extra>'+label+'</extra>'))
             counts.append(f'{len(ix):,} / {len(display_xyz):,} {label.lower()} points')
-    visible_cameras=cameras
+    visible_cameras=cameras.copy()
     if supported and selected in points:
         visible_cameras=cameras[cameras.image_id.isin([o['image_id'] for o in points[selected]['track']])]
+    camera_xyz=visible_cameras[['x','y','z']].to_numpy(dtype=float)-model_origin if not visible_cameras.empty else np.empty((0,3))
     if isolate in ('All enabled','Cameras') and (show_cameras or trajectory):
-        if show_cameras:fig.add_trace(go.Scatter3d(x=visible_cameras.x.tolist(),y=visible_cameras.y.tolist(),z=visible_cameras.z.tolist(),mode='markers',marker=dict(size=4,color='#eab46f'),text=visible_cameras.filename.tolist(),name='Cameras',hovertemplate='%{text}<extra>Estimated camera</extra>'))
-        if trajectory:fig.add_trace(go.Scatter3d(x=visible_cameras.x.tolist(),y=visible_cameras.y.tolist(),z=visible_cameras.z.tolist(),mode='lines',line=dict(width=3,color='#eab46f'),name='Camera Trajectory',hoverinfo='skip'))
+        if show_cameras:fig.add_trace(go.Scatter3d(x=camera_xyz[:,0].tolist(),y=camera_xyz[:,1].tolist(),z=camera_xyz[:,2].tolist(),mode='markers',marker=dict(size=4,color='#eab46f'),text=visible_cameras.filename.tolist(),name='Cameras',hovertemplate='%{text}<extra>Estimated camera</extra>'))
+        if trajectory:fig.add_trace(go.Scatter3d(x=camera_xyz[:,0].tolist(),y=camera_xyz[:,1].tolist(),z=camera_xyz[:,2].tolist(),mode='lines',line=dict(width=3,color='#eab46f'),name='Camera Trajectory',hoverinfo='skip'))
     if selected in points:
-        p=points[selected]['xyz'];fig.add_trace(go.Scatter3d(x=[p[0]],y=[p[1]],z=[p[2]],mode='markers',marker=dict(size=7,color='#ffffff'),name='Selected point',customdata=[selected]))
+        p=np.asarray(points[selected]['xyz'])-model_origin;fig.add_trace(go.Scatter3d(x=[p[0]],y=[p[1]],z=[p[2]],mode='markers',marker=dict(size=7,color='#ffffff'),name='Selected point',customdata=[selected]))
     if mesh_bounds is not None:
-        bounds = mesh_bounds
+        bounds = (mesh_bounds[0]-model_origin, mesh_bounds[1]-model_origin)
     elif all_xyz:
         ref_xyz = np.concatenate(all_xyz)
         bounds = (ref_xyz.min(0), ref_xyz.max(0))
     elif not cameras.empty:
-        bounds = (cameras[['x','y','z']].to_numpy().min(0), cameras[['x','y','z']].to_numpy().max(0))
+        bounds = (camera_xyz.min(0), camera_xyz.max(0))
     else:
         bounds = (np.array([-1.0, -1.0, -1.0]), np.array([1.0, 1.0, 1.0]))
     camera_mode = st.session_state.get('world_camera_mode', 'initial')
@@ -223,10 +224,7 @@ def render_world(root,summary,selection,metadata):
         camera = _scene_camera_from_bounds(bounds, mode='initial')
     else:
         camera = _scene_camera_from_bounds(bounds, mode='initial')
-    center = np.array([0.0, 0.0, 0.0], dtype=float)
-    eye = np.array([1.5, 1.5, 1.2], dtype=float)
-    up = np.array([0.0, 0.0, 1.0], dtype=float)
-    if show_cameras or trajectory:all_xyz.append(visible_cameras[['x','y','z']].to_numpy())
+    if show_cameras or trajectory:all_xyz.append(camera_xyz)
     if all_xyz:
         reference=np.concatenate(all_xyz)
     elif not cameras.empty:
@@ -234,20 +232,25 @@ def render_world(root,summary,selection,metadata):
     else:
         reference=np.array([[-1.0, -1.0, -1.0], [1.0, 1.0, 1.0]])
     lo=reference.min(0);hi=reference.max(0);span=np.maximum(hi-lo,1e-4);pad=span*.12
-    scene_camera={'eye': dict(x=float(eye[0]),y=float(eye[1]),z=float(eye[2])), 'center': dict(x=float(center[0]),y=float(center[1]),z=float(center[2])), 'up': dict(x=float(up[0]),y=float(up[1]),z=float(up[2]))}
+    scene_camera=camera
     axes={k:dict(range=[float(lo[i]-pad[i]),float(hi[i]+pad[i])],visible=False,showbackground=False,showgrid=False,zeroline=False) for i,k in enumerate(('xaxis','yaxis','zaxis'))}
-    fig.update_layout(height=720,paper_bgcolor='#101820',font=dict(color='#bdd0df'),margin=dict(l=0,r=0,t=0,b=0),
-        scene=dict(**axes,aspectmode='data',bgcolor='#101820',camera=scene_camera),
+    fig.update_layout(height=780,paper_bgcolor='#0d171c',font=dict(color='#bfceca'),margin=dict(l=0,r=0,t=0,b=0),
+        scene=dict(**axes,aspectmode='data',bgcolor='#0d171c',camera=scene_camera),
         legend=dict(orientation='h',y=.02,x=.02,bgcolor='rgba(16,24,32,.75)'),uirevision=f'{run}-oblique')
     with left:
-        event=_world(figure=fig.to_json(),key='world_'+str(root),default=None)
+        if fig.data:
+            event=_world(figure=fig.to_json(),key='world_'+str(root),default=None)
+        else:
+            event=None
+            st.info('No geometry is available in this mission yet. Run image analysis and reconstruction, or select a mission with saved PLY artifacts.')
         with st.expander('Display details'):st.caption(' · '.join(counts)+'. Original resolution is retained in exports. Trajectory follows filename order. The mesh remains the default subject; overlays are optional.')
     if event and event.get('nonce')!=st.session_state.get('world_event') and points and event.get('layer') not in ('Cameras','Camera Trajectory'):
         st.session_state['world_event']=event['nonce']
         pid=event.get('point_id');scope='Exact sparse-point observation track.'
         if pid not in points:
             from scipy.spatial import cKDTree
-            ids=list(points);distance,index=cKDTree([points[i]['xyz'] for i in ids]).query(event['xyz'])
+            ids=list(points);query_xyz=np.asarray(event['xyz'],dtype=float)+model_origin
+            distance,index=cKDTree([points[i]['xyz'] for i in ids]).query(query_xyz)
             pid=ids[index];scope=f'Nearest sparse track, {distance:.5f} model units from the selected geometry. This is contextual evidence, not exact surface provenance.'
         st.session_state['world_point']=pid;st.session_state['world_point_picker']=pid;st.session_state['world_scope']=scope
         st.rerun()
