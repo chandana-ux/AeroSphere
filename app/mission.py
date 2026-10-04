@@ -53,6 +53,12 @@ def catalog(code_root):
         result.append({'root':root, **p, 'images':selection.get('input_images',0),
                        'status':'3D ready' if recon else job.get('status','Awaiting input'),
                        'capture':'Video' if (root/'video_ingestion/video_metadata.json').exists() else 'Images'})
+    name_counts = {}
+    for item in result:
+        name_counts[item['name']] = name_counts.get(item['name'], 0) + 1
+    for item in result:
+        if name_counts[item['name']] > 1 and item['root'] != Path(code_root):
+            item['name'] = f"{item['name']} · {item['root'].name[-6:]}"
     return result
 
 def package_mission(root, summary, selection, geo):

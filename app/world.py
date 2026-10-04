@@ -12,7 +12,12 @@ _world=declare_component('aerosphere_world',path=str(Path(__file__).parent/'view
 
 @st.cache_data
 def geometry(path,mtime,mesh=False):
-    import open3d as o3d
+    try:
+        import open3d as o3d
+    except (ImportError, OSError) as exc:
+        raise RuntimeError(
+            f'Open3D is unavailable in this Python runtime ({exc}). Install requirements with Python 3.11 or 3.12.'
+        ) from exc
     if mesh:
         obj=o3d.io.read_triangle_mesh(path)
         obj.compute_vertex_normals()
@@ -64,9 +69,32 @@ def _scene_camera_from_bounds(bounds, mode='initial'):
     return {'eye': {'x': float(eye[0]), 'y': float(eye[1]), 'z': float(eye[2])}, 'center': {'x': 0.0, 'y': 0.0, 'z': 0.0}, 'up': {'x': 0.0, 'y': 0.0, 'z': 1.0}}
 
 
+def mesh_path_for_mission(root, run):
+    run = Path(run)
+    mesh = run / 'dense/mesh.ply'
+    if mesh.is_file():
+        return mesh
+    display_mesh = run / 'dense/mesh_display.ply'
+    if display_mesh.is_file():
+        return display_mesh
+    code_root = Path(__file__).resolve().parents[1]
+    demo_mesh = code_root / 'results/dense/mesh.ply'
+    if Path(root).resolve() == code_root and demo_mesh.is_file():
+        return demo_mesh
+    return mesh
+
+
+def run_directory_for_mission(root, summary):
+    root = Path(root).resolve()
+    candidate = Path(summary['run_directory']).resolve() if summary and summary.get('run_directory') else root / 'results'
+    code_root = Path(__file__).resolve().parents[1]
+    if root == code_root or candidate == root or candidate.is_relative_to(root):
+        return candidate
+    return root / 'results'
+
+
 def render_world(root,summary,selection,metadata):
-    candidate = Path(summary['run_directory']) if summary and 'run_directory' in summary else (root / 'results' if (root / 'results').exists() else root)
-    run = candidate
+    run = run_directory_for_mission(root, summary)
     camera_trajectory = run / 'camera_trajectory.csv'
     cameras = pd.DataFrame(columns=['filename', 'x', 'y', 'z', 'image_id'])
     if camera_trajectory.exists():
@@ -83,13 +111,13 @@ def render_world(root,summary,selection,metadata):
             images,points={},{}
     except (OSError,ValueError,KeyError,IndexError):images,points={},{}
 
-    project_mesh = (Path(__file__).resolve().parents[1] / 'results' / 'dense' / 'mesh.ply')
-    mesh_path = project_mesh if project_mesh.exists() else run/'dense/mesh.ply'
+    mesh_path = mesh_path_for_mission(root, run)
     dense_path = run/'dense/fused.ply'
     mesh_vertices = 0
     mesh_triangles = 0
     dense_points_count = 0
     mesh_bounds = None
+    mesh_error = None
     if mesh_path.exists():
         try:
             mesh_xyz, _, mesh_triangles_arr = geometry(str(mesh_path), mesh_path.stat().st_mtime_ns, mesh=True)
@@ -106,9 +134,10 @@ def render_world(root,summary,selection,metadata):
                 print(f'MESH_MAX={mesh_bounds[1].tolist()}')
                 print(f'MESH_CENTER={mesh_center.tolist()}')
                 print(f'MESH_EXTENT={mesh_extent.tolist()}')
-        except Exception:
+        except Exception as exc:
             mesh_vertices = 0
             mesh_triangles = 0
+            mesh_error = f'{type(exc).__name__}: {exc}'
     if dense_path.exists() and mesh_bounds is None:
         try:
             dense_xyz, _, _ = geometry(str(dense_path), dense_path.stat().st_mtime_ns, mesh=False)
@@ -119,7 +148,7 @@ def render_world(root,summary,selection,metadata):
             dense_points_count = 0
 
     st.markdown(f'''
-    <div style="margin: 0 0 0.7rem 0; padding: 0.2rem 0 0.6rem 0; border-bottom: 1px solid rgba(148,177,196,0.18);">
+    <div style="margin: 0 0 0.7rem 0; padding: 0.4rem 0 0.6rem 0; border-bottom: 1px solid rgba(148,177,196,0.18); line-height: 1.35;">
       <div style="font-size:0.68rem; letter-spacing:0.18em; text-transform:uppercase; color:#6ac7d8; font-weight:700;">3D WORLD</div>
       <div style="font-size:1.15rem; font-weight:700; margin-top:0.2rem;">AeroSphere Reconstruction</div>
       <div style="display:flex; gap:1rem; flex-wrap:wrap; margin-top:0.45rem; color:#bfd0db; font-size:0.68rem; letter-spacing:0.08em; text-transform:uppercase;">
@@ -131,9 +160,12 @@ def render_world(root,summary,selection,metadata):
     ''', unsafe_allow_html=True)
 
     left,right=st.columns([4.2,1.15],gap='small')
+    if mesh_error:
+        with left:
+            st.warning(f'Mesh file could not be loaded: {mesh_error}')
     with right:
         st.markdown('<div class="compact-label">View</div>', unsafe_allow_html=True)
-        has_mesh=mesh_path.exists()
+        has_mesh=mesh_path.is_file() and mesh_error is None
         has_dense=dense_path.exists()
         has_sparse=(run/'sparse.ply').exists() or bool(points)
         mesh=st.checkbox('Mesh', value=True if has_mesh else False, key='world_mesh_toggle')
@@ -171,7 +203,13 @@ def render_world(root,summary,selection,metadata):
         if not path.exists():
             with left:st.info(label+' is not available for this reconstruction.')
             continue
-        xyz,colors,triangles=geometry(str(path),path.stat().st_mtime_ns,is_mesh)
+        if is_mesh and mesh_error:
+            continue
+        try:
+            xyz,colors,triangles=geometry(str(path),path.stat().st_mtime_ns,is_mesh)
+        except Exception as exc:
+            with left:st.warning(f'{label} geometry could not be loaded: {type(exc).__name__}: {exc}')
+            continue
         if not len(xyz):continue
         if label=='Sparse Cloud' and points:
             ids=list(points);xyz=np.array([points[i]['xyz'] for i in ids]);colors=np.empty((0,3))

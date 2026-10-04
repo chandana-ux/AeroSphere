@@ -1,6 +1,7 @@
 """Demo reporting or isolated new-input processing; preserves the Aukerman run."""
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -10,8 +11,10 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 
-ROOT=Path(__file__).resolve().parents[1]
-sys.path.insert(0,str(ROOT/'app'))
+CODE_ROOT=Path(__file__).resolve().parents[1]
+DATA_ROOT=Path(os.environ.get('AEROSPHERE_DATA_ROOT',CODE_ROOT)).resolve()
+ROOT=CODE_ROOT
+sys.path.insert(0,str(CODE_ROOT/'app'))
 from geo import prepare
 from evidence import build_evidence
 
@@ -63,8 +66,9 @@ def report(project):
 def process(source,job=None,interval=2,max_frames=300,reconstruct=False,dense=False):
     source=Path(source).resolve()
     if not source.exists():raise ValueError('Input path does not exist')
-    job=Path(job).resolve() if job else ROOT/'results/jobs'/datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S_%fZ')
-    base=(ROOT/'results/jobs').resolve()
+    data_root=Path(os.environ.get('AEROSPHERE_DATA_ROOT',DATA_ROOT)).resolve()
+    job=Path(job).resolve() if job else data_root/'results/jobs'/datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S_%fZ')
+    base=(data_root/'results/jobs').resolve()
     if job.parent!=base:raise ValueError('Jobs must be immediate children of results/jobs')
     job.mkdir(parents=True,exist_ok=True)
     if (job/'job.json').exists():
@@ -92,9 +96,9 @@ def process(source,job=None,interval=2,max_frames=300,reconstruct=False,dense=Fa
             video=extract_video(source,job/'video_ingestion',interval,max_frames)
             state['video']=video;source=job/'video_ingestion/frames'
         state['stage']='metadata';save()
-        run([ROOT/'scripts/extract_metadata.py','--input',source,'--output',job/'metadata/image_metadata.csv'])
+        run([CODE_ROOT/'scripts/extract_metadata.py','--input',source,'--output',job/'metadata/image_metadata.csv'])
         state['stage']='image intelligence';save()
-        run([ROOT/'scripts/analyze_images.py','--input',source,'--project',job])
+        run([CODE_ROOT/'scripts/analyze_images.py','--input',source,'--project',job])
         if reconstruct:
             selected_info=json.loads((job/'results/image_intelligence/latest.json').read_text())
             if selected_info['selected_images']<3:
@@ -103,7 +107,7 @@ def process(source,job=None,interval=2,max_frames=300,reconstruct=False,dense=Fa
             if scores.orb_keypoints.fillna(0).max()<50:
                 raise ValueError('Insufficient visual texture/features for a reliable reconstruction attempt')
             state['stage']='COLMAP';save()
-            cmd=[ROOT/'scripts/run_reconstruction.py','--project',job]
+            cmd=[CODE_ROOT/'scripts/run_reconstruction.py','--project',job]
             if dense:cmd.append('--dense')
             run(cmd)
             state['stage']='reports';save();report(job)

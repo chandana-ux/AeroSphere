@@ -64,3 +64,9 @@ Real-artifact tests require prepared baseline geometry, metadata and optional ca
 ## Deployment
 
 GitHub stores reproducible source. Vercel is outside immediate scope: this application needs local persistent files, Python, external COLMAP and CUDA processing. No cloud service is required by the core workflow.
+
+### Streamlit Community Cloud
+
+The bundled demo mesh and dashboard can be viewed in the cloud when the app is deployed with Python 3.11 or 3.12; Open3D 0.19.0 publishes wheels for those versions (and up through Python 3.12). Select a supported version in the app's Advanced settings and keep the pinned `requirements.txt`. Python 3.13+ is not supported by the pinned Open3D release. The deployment's Python version cannot be pinned by this repository's requirements file.
+
+Cloud deployment does not include the local COLMAP executable or a CUDA GPU, so starting new COLMAP reconstruction, especially dense reconstruction, is not supported there. COLMAP must be installed separately on a local machine; the app only enables new reconstruction when its launcher is found. The video reader uses OpenCV rather than invoking the FFmpeg command directly. Local FFmpeg is installed on the development machine, but codec support in another environment depends on that environment's OpenCV build. Streamlit Cloud cannot read paths on a user's computer; use uploads there. Treat cloud storage as temporary, and use a local deployment for persistent mission data and full reconstruction.

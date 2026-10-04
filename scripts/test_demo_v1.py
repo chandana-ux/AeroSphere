@@ -15,6 +15,8 @@ from streamlit.testing.v1 import AppTest
 
 CODE=Path(__file__).resolve().parents[1]
 DATA=Path(os.environ.get('AEROSPHERE_DATA_ROOT',CODE))
+BASELINE_AVAILABLE=(DATA/'output/reconstruction/latest.json').is_file() and (DATA/'results/image_intelligence/latest.json').is_file()
+DETECTOR_WEIGHTS=DATA/'output/models/torch/checkpoints/ssdlite320_mobilenet_v3_large_coco-a79551df.pth'
 sys.path.insert(0,str(CODE/'app'))
 from temporal import similarity,compare_points
 from lineage import load_tracks,supported_by
@@ -36,6 +38,7 @@ class V1Tests(unittest.TestCase):
         with self.assertRaises(ValueError):compare_points(a,b,np.zeros((4,4)),1)
         with self.assertRaises(ValueError):compare_points(a,b,matrix,0)
 
+    @unittest.skipUnless(BASELINE_AVAILABLE, 'Prepared COLMAP summary and image selection are not present')
     def test_exact_track_integrity_and_replay(self):
         summary=json.loads((DATA/'output/reconstruction/latest.json').read_text())
         folder=Path(summary['run_directory'])/('text_'+Path(summary['sparse_model']).name)
@@ -48,6 +51,7 @@ class V1Tests(unittest.TestCase):
             (p/'points3D.txt').write_text('5 0 0 0 255 255 255 1 1 0 2 0\n')
             with self.assertRaises(ValueError):load_tracks(p)
 
+    @unittest.skipUnless(BASELINE_AVAILABLE, 'Prepared reconstruction and image-selection artifacts are not present')
     def test_package_checksums_and_real_geometry(self):
         summary=json.loads((DATA/'output/reconstruction/latest.json').read_text())
         selection=json.loads((DATA/'results/image_intelligence/latest.json').read_text())
@@ -64,24 +68,23 @@ class V1Tests(unittest.TestCase):
     def test_empty_start_and_navigation_offline(self):
         with tempfile.TemporaryDirectory() as d,patch.dict(os.environ,{'AEROSPHERE_DATA_ROOT':d}),patch.object(socket.socket,'connect',side_effect=AssertionError('Network forbidden')):
             app=AppTest.from_file(str(CODE/'app/dashboard.py'),default_timeout=90).run()
-            for page in ['HOME','MISSION','FLIGHT INTELLIGENCE','RECONSTRUCTION','3D WORLD','INTELLIGENCE','EXPORT']:
-                app.sidebar.radio[0].set_value(page).run()
+            for page in ['MISSION','FRAMES','RECONSTRUCTION','3D WORLD','GEO','MEASURE','QUALITY','INTELLIGENCE']:
+                next(button for button in app.button if button.label==page).click().run()
                 self.assertFalse(app.exception,str(app.exception));self.assertFalse(app.error,[e.value for e in app.error])
 
     def test_cached_mission_navigation_offline(self):
         with patch.dict(os.environ,{'AEROSPHERE_DATA_ROOT':str(DATA)}),patch.object(socket.socket,'connect',side_effect=AssertionError('Network forbidden')):
             app=AppTest.from_file(str(CODE/'app/dashboard.py'),default_timeout=90).run()
-            for page in ['HOME','MISSION','FLIGHT INTELLIGENCE','RECONSTRUCTION','3D WORLD','INTELLIGENCE','EXPORT']:
-                app.sidebar.radio[0].set_value(page).run()
+            for page in ['MISSION','FRAMES','RECONSTRUCTION','3D WORLD','GEO','MEASURE','QUALITY','INTELLIGENCE']:
+                next(button for button in app.button if button.label==page).click().run()
                 self.assertFalse(app.exception,str(app.exception));self.assertFalse(app.error,[e.value for e in app.error])
-            app.sidebar.radio[0].set_value('HOME').run()
-            self.assertEqual(len(app.metric),0)  # Home emphasizes the workflow, not reconstruction counts.
 
     def test_missing_model_never_downloads(self):
         from semantic import detect
         with tempfile.TemporaryDirectory() as d,patch.object(socket.socket,'connect',side_effect=AssertionError('Network forbidden')):
             self.assertEqual(detect(Path(d)/'not_used.jpg',Path(d),allow_download=True)['status'],'optional/unavailable')
 
+    @unittest.skipUnless(BASELINE_AVAILABLE and DETECTOR_WEIGHTS.is_file(), 'Prepared image data or cached detector weights are not present')
     def test_cached_detector_offline(self):
         from semantic import detect
         selection=json.loads((DATA/'results/image_intelligence/latest.json').read_text())
@@ -103,5 +106,16 @@ class V1Tests(unittest.TestCase):
             self.assertEqual(entries[0]['mode'],'INFRASTRUCTURE')
             self.assertEqual(entries[0]['category'],'INFRASTRUCTURE')
             self.assertIsNone(entries[0]['telemetry_extensions']['rtk'])
+
+    def test_duplicate_mission_names_get_unique_labels(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);jobs=root/'results/jobs'
+            for suffix in ('001','002'):
+                mission=jobs/('20261004T120000_'+suffix);save_profile(mission,'Same mission','RECONNAISSANCE')
+                (mission/'job.json').write_text(json.dumps({'status':'completed','source':'sample.mp4'}))
+            entries=catalog(root)
+            labels=[item['name'] for item in entries if item['name'].startswith('Same mission')]
+            self.assertEqual(len(labels),2)
+            self.assertEqual(len(set(labels)),2)
 
 if __name__=='__main__':unittest.main()

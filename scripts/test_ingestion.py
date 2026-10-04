@@ -52,14 +52,14 @@ class IngestionTests(unittest.TestCase):
     def test_upload_controls_and_empty_reconstruction(self):
         with tempfile.TemporaryDirectory() as d,patch.dict('os.environ',{'AEROSPHERE_DATA_ROOT':d}):
             app=AppTest.from_file(str(ROOT/'app/dashboard.py'),default_timeout=60).run()
-            app.sidebar.radio[0].set_value('MISSION').run()
+            next(button for button in app.button if button.label=='MISSION').click().run()
             self.assertFalse(app.exception)
             self.assertEqual(len(app.get('file_uploader')),1)
             next(r for r in app.radio if r.label=='Input method').set_value('UPLOAD IMAGE SEQUENCE').run()
             self.assertEqual(len(app.get('file_uploader')),1)
-            next(r for r in app.radio if r.label=='Input method').set_value('CONNECT DRONE').run()
-            self.assertTrue(any('NO DRONE CONNECTED' in i.value for i in app.info))
-            app.sidebar.radio[0].set_value('RECONSTRUCTION').run()
+            next(r for r in app.radio if r.label=='Input method').set_value('EXISTING DATA').run()
+            self.assertTrue(any('existing local file or folder' in item.value for item in app.caption))
+            next(button for button in app.button if button.label=='RECONSTRUCTION').click().run()
             self.assertFalse(app.exception)
             self.assertFalse(any(b.label=='Start 3D reconstruction' for b in app.button))
 

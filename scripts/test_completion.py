@@ -18,6 +18,20 @@ ROOT=Path(__file__).resolve().parents[1]
 
 
 class CompletionTests(unittest.TestCase):
+    def test_input_pipeline_uses_separate_data_root(self):
+        from pipeline import process
+        with tempfile.TemporaryDirectory() as temp:
+            base=Path(temp);source=base/'raw';source.mkdir()
+            frame=np.random.default_rng(22).integers(0,256,(120,160,3),dtype=np.uint8)
+            cv2.imwrite(str(source/'frame.png'),frame)
+            data_root=base/'mission-data'
+            job=data_root/'results/jobs'/'isolated-mission'
+            with patch.dict('os.environ',{'AEROSPHERE_DATA_ROOT':str(data_root)}):
+                result=process(source,job,reconstruct=False)
+            self.assertEqual(result['status'],'completed',result)
+            self.assertTrue((job/'metadata/image_metadata.csv').is_file())
+            self.assertTrue((job/'results/image_intelligence/latest.json').is_file())
+
     def test_new_job_reports_insufficient_input(self):
         from pipeline import process
         from semantic import detect
@@ -62,6 +76,7 @@ class CompletionTests(unittest.TestCase):
         self.assertAlmostEqual(coordinate((41,18,13.7576),'N',True),41.30382155555555)
         with self.assertRaises(ValueError):coordinate((95,0,0),'N',True)
 
+    @unittest.skipUnless((ROOT/'output/reconstruction/latest.json').is_file(), 'Prepared local reconstruction artifacts are not present')
     def test_real_artifact_counts(self):
         summary=json.loads((ROOT/'output/reconstruction/latest.json').read_text());run=Path(summary['run_directory'])
         self.assertEqual(summary['registered_images'],77)
@@ -82,9 +97,8 @@ class CompletionTests(unittest.TestCase):
         with patch('pandas.read_csv',side_effect=missing):
             app=AppTest.from_file(str(ROOT/'app/dashboard.py'),default_timeout=60).run()
             self.assertEqual(len(app.exception),0)
-            app.sidebar.radio[0].set_value('3D WORLD').run()
             for page in ['GEO','MEASURE']:
-                app.get('button_group')[0].set_value(page).run()
+                next(button for button in app.button if button.label==page).click().run()
                 self.assertEqual(len(app.exception),0,str(app.exception))
         st.cache_data.clear()
 

@@ -1,5 +1,5 @@
 <!doctype html><html><head><meta charset="utf-8"><script src="plotly.min.js"></script>
-<style>body{margin:0;background:#0d171c;color:#bfceca;font:12px system-ui}#world{height:780px}#status{padding:0 12px}</style></head>
+<style>body{margin:0;background:#0d171c;color:#bfceca;font:12px system-ui}#world{height:780px}#status{padding:0 12px;line-height:1.4}</style></head>
 <body><div id="world" aria-label="Interactive reconstructed 3D world"></div><div id="status">Drag to orbit · right drag to pan · scroll to zoom · click geometry to inspect evidence</div>
 <script>
 const world=document.getElementById('world');
@@ -13,8 +13,8 @@ window.addEventListener('message',async event=>{
  world.on('plotly_click',event=>{const p=event.points[0];if(!p)return;
   send('streamlit:setComponentValue',{value:{point_id:p.customdata||null,xyz:[p.x,p.y,p.z],layer:p.data.name,nonce:Date.now()},dataType:'json'});
  });
- send('streamlit:setFrameHeight',{height:810});
+ send('streamlit:setFrameHeight',{height:820});
 });
 send('streamlit:componentReady',{apiVersion:1});
-send('streamlit:setFrameHeight',{height:810});
+send('streamlit:setFrameHeight',{height:820});
 </script></body></html>
