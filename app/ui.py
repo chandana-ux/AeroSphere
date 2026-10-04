@@ -69,7 +69,7 @@ def apply_workspace_theme():
         }
 
         .block-container {
-            padding-top: 0.15rem !important;
+            padding-top: 4rem !important;
             padding-bottom: 0.2rem !important;
         }
 
@@ -107,10 +107,11 @@ def apply_workspace_theme():
             align-items: center;
             justify-content: space-between;
             gap: 1rem;
-            padding: 0.25rem 0 0.55rem;
+            padding: 0.45rem 0 0.7rem;
             border-bottom: 1px solid var(--aero-border);
             margin-bottom: 0.5rem;
-            min-height: 3.2rem;
+            min-height: 3.8rem;
+            overflow: visible;
         }
 
         .workspace-header-left {
@@ -121,13 +122,20 @@ def apply_workspace_theme():
             flex: 1 1 auto;
         }
 
-        .workspace-header-title {
-            margin: 0;
+        .workspace-brand-name {
+            color: var(--aero-accent);
             font-size: 1.65rem;
-            letter-spacing: 0;
-            line-height: 1.1;
             font-weight: 700;
-            color: var(--aero-text);
+            line-height: 1.15;
+            overflow-wrap: anywhere;
+        }
+
+        .workspace-brand-tagline {
+            margin-top: 0.2rem;
+            color: var(--aero-text-soft);
+            font-size: 0.72rem;
+            line-height: 1.4;
+            overflow-wrap: anywhere;
         }
 
         .eyebrow {
@@ -482,13 +490,16 @@ def apply_workspace_theme():
                 gap: 0.6rem;
             }
 
+            .workspace-header-right {
+                align-self: flex-end;
+            }
+
             .workspace-header-left {
                 flex-wrap: wrap;
             }
 
-            .workspace-header-title {
+            .workspace-brand-name {
                 font-size: 1.35rem;
-                overflow-wrap: anywhere;
             }
 
             .world-hero {
@@ -510,16 +521,15 @@ def status_strip(stats):
 
 def workspace_header(title, mission_name, status_label='READY', actions=None):
     st.markdown(
-        f'''<div class="workspace-header">
+        '''<div class="workspace-header">
             <div class="workspace-header-left">
-                <div class="aerosphere-brand"><span class="aerosphere-mark">◈</span> AeroSphere</div>
-                <div>
-                    <div class="eyebrow">Single-pass spatial intelligence</div>
-                    <div class="workspace-header-title">{mission_name}</div>
+                <div class="workspace-brand">
+                    <div class="workspace-brand-name">AEROSPHERE</div>
+                    <div class="workspace-brand-tagline">From One Flight to a Trusted 3D World</div>
                 </div>
             </div>
             <div class="workspace-header-right">
-                <div class="workspace-status"><span class="status-dot"></span>{status_label}</div>
+                <div class="workspace-status"><span class="status-dot"></span>''' + status_label + '''</div>
             </div>
         </div>''',
         unsafe_allow_html=True,
