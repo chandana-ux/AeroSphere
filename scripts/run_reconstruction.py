@@ -1,14 +1,34 @@
-"""Run installed COLMAP 4.2, preserving logs and real sparse/dense outputs."""
+"""Run the detected COLMAP CLI with capability checks and dataset-local outputs."""
 import argparse
 import csv
 import json
 import os
-import shutil
+import hashlib
 import sqlite3
 import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+import sys
+import atexit
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
+from reconstruction_runtime import Colmap, DependencyError, write_json
+
+CURRENT = {}
+
+
+def progress(stage=None, status=None, error=None):
+    if not CURRENT:
+        return
+    if stage:
+        CURRENT["stage"] = stage
+    if status:
+        CURRENT["stages"][CURRENT["stage"]] = status
+    if error:
+        CURRENT["error"] = str(error)
+    write_json(Path(CURRENT["project"]) / "reconstruction_progress.json", CURRENT)
+
 
 import numpy as np
 from scipy.spatial.transform import Rotation
@@ -45,63 +65,93 @@ def read_model(folder):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     project = Path(__file__).resolve().parents[1]
-    default_colmap = os.environ.get('AEROSPHERE_COLMAP') or shutil.which('colmap')
-    if not default_colmap and os.name == 'nt':
-        default_colmap = str(Path.home() / 'Downloads/colmap-x64-windows-cuda/COLMAP.bat')
-    parser.add_argument('--colmap', type=Path, default=Path(default_colmap) if default_colmap else Path('colmap'))
+    parser.add_argument('--colmap', type=Path, help='COLMAP executable, launcher or installation directory')
     parser.add_argument('--images', type=Path)
     parser.add_argument('--resume', type=Path, help='Existing run directory; reuse successful stages')
     parser.add_argument('--dense', action='store_true', help='Attempt bounded low-resolution dense reconstruction after sparse succeeds')
-    parser.add_argument('--camera-sharing', choices=['auto','single'], default='auto', help='Auto lets COLMAP group cameras from metadata; single requires a calibrated common camera')
-    parser.add_argument('--dense-size', type=int, choices=[800,1200,1600], default=1200, help='Bounded MVS image dimension; 1200 recommended for 4 GB GPU')
+    parser.add_argument('--camera-sharing', choices=['auto','single'], default='auto', help='Auto lets COLMAP group cameras from metadata; single shares estimated intrinsics; use only for one lens/zoom and resolution')
+    parser.add_argument('--dense-size', type=int, choices=[800,1200,1600], default=800, help='Bounded MVS image dimension; 800 is the conservative 4 GB GPU default')
     parser.add_argument('--camera-model', choices=['SIMPLE_RADIAL','OPENCV'], default='SIMPLE_RADIAL')
     parser.add_argument('--camera-params', default='', help='Optional known intrinsics in COLMAP camera-model order')
     parser.add_argument('--cpu', action='store_true', help='CPU feature extraction/matching')
+    parser.add_argument('--backend', choices=['colmap', 'opencv', 'auto'], default='colmap',
+                        help='colmap = require the COLMAP CLI (default); opencv = OpenCV SfM fallback; auto = COLMAP when installed, otherwise OpenCV')
+    parser.add_argument('--opencv-max-images', type=int, default=80, help='Frame cap for the OpenCV fallback backend')
     parser.add_argument('--project', type=Path, default=project, help='Separate artifact root for new-input jobs')
     args = parser.parse_args()
     project=args.project.resolve()
-    if not args.colmap.is_file():
-        parser.error(f'COLMAP launcher missing: {args.colmap}')
+    lock = project / 'reconstruction.lock'
+    project.mkdir(parents=True, exist_ok=True)
+    try:
+        with lock.open('x') as stream:
+            stream.write(str(os.getpid()))
+    except FileExistsError:
+        parser.error('A reconstruction lock exists; another worker may be active. See local setup instructions for recovery.')
+    atexit.register(lambda: lock.unlink(missing_ok=True))
+    CURRENT.update(project=str(project), stage='sparse', stages={'sparse':'processing','dense':'not_started','mesh':'not_started'}, status='processing')
+    progress()
     images = args.images or Path(json.loads((project / 'results/image_intelligence/latest.json').read_text())['selected_directory'])
     if not images.is_dir():
-        parser.error(f'Images missing: {images}')
+        raise ValueError(f'Images missing: {images}')
     run = args.resume or project / 'output/reconstruction' / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S_%fZ')
     run = run.resolve()
+    if not run.is_relative_to(project):
+        raise ValueError('Reconstruction run must be inside the selected dataset')
     run.mkdir(parents=True, exist_ok=True)
+    CURRENT['run_directory'] = str(run)
+    progress()
+    cli = None
+    if args.backend in ('colmap', 'auto'):
+        try:
+            cli = Colmap(args.colmap)
+        except DependencyError:
+            if args.backend == 'colmap':
+                raise
+    if cli is None:
+        from opencv_sfm import run as opencv_run
+        print('COLMAP unavailable; running the OpenCV structure-from-motion fallback', flush=True)
+        summary = opencv_run(images, project, run, dense=args.dense, max_images=args.opencv_max_images)
+        CURRENT['stages'] = {'sparse': 'completed',
+                             'dense': summary.get('dense_status', 'not_requested'),
+                             'mesh': summary.get('mesh_status', 'not_requested')}
+        CURRENT['status'] = 'partial' if args.dense and (summary.get('dense_status') != 'success' or summary.get('mesh_status') != 'success') else 'completed'
+        progress()
+        print(json.dumps(summary, indent=2), flush=True)
+        return
+    args.colmap = cli.executable
     logs = run / 'logs'
     logs.mkdir(exist_ok=True)
     state_path = run / 'stages.json'
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
-    config = dict(images=str(images.resolve()), colmap=str(args.colmap.resolve()), max_image_size=1600,
+    digest = hashlib.sha256()
+    for image in sorted(images.iterdir()):
+        if image.is_file():
+            digest.update(image.name.encode('utf-8'))
+            with image.open('rb') as stream:
+                for block in iter(lambda: stream.read(1024 * 1024), b''):
+                    digest.update(block)
+    config = dict(image_fingerprint=digest.hexdigest(), images=str(images.resolve()), colmap=str(args.colmap.resolve()), max_image_size=1600,
                   max_features=8192, gpu=not args.cpu, camera_sharing=args.camera_sharing, camera_model=args.camera_model, camera_params=args.camera_params, dense_size=args.dense_size)
     config_path = run / 'config.json'
-    if config_path.exists():
-        old_config=json.loads(config_path.read_text())
-        if 'dense_size' not in old_config:
-            args.dense_size=800
-            args.camera_sharing='single'
-            config={key:config[key] for key in old_config}
     if config_path.exists() and json.loads(config_path.read_text()) != config:
-        parser.error('Resume configuration differs; supply original image path/GPU options or start a fresh run')
+        raise ValueError('Resume configuration or image contents differ; start a fresh run')
     config_path.write_text(json.dumps(config, indent=2))
-    env = os.environ.copy()
-    env['QT_QPA_PLATFORM'] = 'offscreen'
-    # The supplied batch wrapper reparses quoted paths in an IF statement and
-    # fails on spaces. Invoke its same executable with its same DLL/plugin setup.
-    executable = args.colmap
-    if executable.suffix.lower() == '.bat':
-        install = executable.parent
-        executable = install / 'bin' / 'colmap.exe'
-        env['PATH'] = str(install / 'bin') + os.pathsep + env.get('PATH', '')
-        env['QT_PLUGIN_PATH'] = str(install / 'plugins')
+    env = cli.env
+    executable = cli.executable
 
     def command(stage, name, options, timeout=1800):
         if state.get(stage, {}).get('success'):
             print(f'Reusing {stage}', flush=True)
             return
-        cmd = [str(executable), name] + list(map(str, options))
         if name != '-h':
-            cmd += ['--log_target', 'stderr', '--log_color', '0']
+            cli.probe(name)
+            (logs / (name + '_help.txt')).write_text(cli.help[name], encoding='utf-8')
+            options = cli.options(name, list(options) + ['--log_target', 'stderr', '--log_color', '0'])
+        cmd = [str(executable), name] + list(map(str, options))
+        CURRENT['command'] = stage
+        progress()
+        state[stage] = {'success':False, 'status':'processing', 'command':cmd}
+        write_json(state_path, state)
         print(f'Starting {stage}; log: {logs / (stage + ".log")}', flush=True)
         start = time.perf_counter()
         with (logs / (stage + '.log')).open('w', encoding='utf-8') as log:
@@ -111,9 +161,11 @@ def main():
             except subprocess.TimeoutExpired:
                 code = -1
         state[stage] = dict(success=code == 0, returncode=code, seconds=time.perf_counter() - start, command=cmd)
-        state_path.write_text(json.dumps(state, indent=2))
+        write_json(state_path, state)
         if code != 0:
-            raise RuntimeError(f'{stage} failed ({code}); inspect {logs / (stage + ".log")}')
+            tail = (logs / (stage + '.log')).read_text(errors='replace')[-2500:]
+            advice = ' Use overlapping views of a static textured subject with camera translation. A fixed camera, pure rotation, blur or moving objects may prevent triangulation.' if stage == 'mapping' else ''
+            raise RuntimeError(f"{stage} failed ({code}).{advice} Inspect {logs / (stage + '.log')}: {tail}")
         print(f'Completed {stage} in {state[stage]["seconds"]:.1f}s', flush=True)
 
     command('version', '-h', [])
@@ -140,7 +192,7 @@ def main():
         parsed = read_model(txt)
         models.append((len(parsed[0]), len(parsed[1]), folder, txt, parsed))
     if not models:
-        raise RuntimeError('Mapper produced no sparse models; inspect mapping.log')
+        raise RuntimeError('No camera alignment could be recovered. Use a static textured subject, overlapping views and camera translation; avoid pure rotation, moving objects, blur and scene cuts. Inspect mapping.log.')
     _, _, model, txt, (cameras, points, errors, tracks) = max(models, key=lambda m: (m[0], m[1]))
     if len(cameras) < 2 or len(points) == 0 or not np.isfinite(points).all():
         raise RuntimeError('Sparse output has insufficient cameras/points or nonfinite coordinates')
@@ -162,21 +214,22 @@ def main():
         trajectory_order='Filename order, not independently verified capture chronology.',
         camera_pose_convention='COLMAP world-to-camera quaternion/translation; center = -R.T @ t.',
         evidence='Points are triangulated estimates supported by image tracks, not ground truth; hidden surfaces remain unknown.',
-        dense_status='not_requested', stage_seconds={k:v['seconds'] for k,v in state.items()})
+        sparse_status='success', mesh_status='not_requested', dense_status='not_requested', stage_seconds={k:v.get('seconds', 0) for k,v in state.items()})
     previous_summary = json.loads((run / 'summary.json').read_text()) if (run / 'summary.json').exists() else {}
     if not args.dense:
-        for key in ('dense_status', 'dense_points', 'dense_error', 'mesh_status', 'mesh_triangles', 'mesh_error', 'mesh_caution'):
+        for key in ('dense_status', 'dense_points', 'dense_error', 'mesh_status', 'mesh_vertices', 'mesh_display', 'mesh_triangles', 'mesh_error', 'mesh_caution'):
             if key in previous_summary:
                 summary[key] = previous_summary[key]
+        for stage, relative in [('dense', 'dense/fused.ply'), ('mesh', 'dense/mesh.ply')]:
+            if summary.get(stage + '_status') == 'success' and (run / relative).is_file():
+                CURRENT['stages'][stage] = 'completed'
     else:
         summary['dense_status'] = 'running'
     def save():
-        (run / 'summary.json').write_text(json.dumps(summary, indent=2))
-        latest_path = run / 'latest.json'
-        if not args.resume:
-            latest_path = project / 'output/reconstruction/latest.json'
-            latest_path.parent.mkdir(parents=True, exist_ok=True)
-        latest_path.write_text(json.dumps(summary, indent=2))
+        write_json(run / 'summary.json', summary)
+        write_json(project / 'output/reconstruction/latest.json', summary)
+    save()
+    progress('sparse', 'completed')
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -191,25 +244,22 @@ def main():
     fig.tight_layout()
     fig.savefig(run / 'camera_trajectory.png', dpi=150)
     plt.close(fig)
-    save()
     print(json.dumps(summary, indent=2), flush=True)
     if args.dense:
         dense = run / 'dense'
         dense.mkdir(exist_ok=True)
+        progress('dense', 'processing')
         try:
+            cli.probe('patch_match_stereo')
             command('undistort', 'image_undistorter', ['--image_path', images, '--input_path', model,
                     '--output_path', dense, '--output_type', 'COLMAP', '--max_image_size', args.dense_size])
             stereo_config = dense / 'stereo/patch-match.cfg'
             if not state.get('stereo', {}).get('success'):
                 lines = stereo_config.read_text().splitlines()
                 stereo_config.write_text('\n'.join('__auto__, 6' if line.strip().startswith('__auto__') else line for line in lines) + '\n')
-            # Force COLMAP 4.2 PatchMatch onto its stable CPU mode instead of GPU 0.
-            # The project was hard-coding `--PatchMatchStereo.gpu_index 0`, which is the
-            # CUDA path that can crash on Windows with exit code 0xC0000409 after writing
-            # several photometric depth maps. In COLMAP 4.2, `gpu_index=-1` is the non-GPU
-            # option and is the correct stable invocation for this dense stage.
+            # gpu_index selects a GPU; -1 is not a promise of CPU dense stereo.
             command('stereo', 'patch_match_stereo', ['--workspace_path', dense, '--workspace_format', 'COLMAP',
-                    '--PatchMatchStereo.max_image_size', args.dense_size, '--PatchMatchStereo.gpu_index', '-1',
+                    '--PatchMatchStereo.max_image_size', args.dense_size, '--PatchMatchStereo.gpu_index', '0',
                     '--PatchMatchStereo.geom_consistency', '0', '--PatchMatchStereo.num_iterations', '5',
                     '--PatchMatchStereo.num_threads', '4', '--PatchMatchStereo.cache_size', '1'], timeout=1800)
             command('fusion', 'stereo_fusion', ['--workspace_path', dense, '--workspace_format', 'COLMAP',
@@ -219,25 +269,51 @@ def main():
             cloud = o3d.io.read_point_cloud(str(dense / 'fused.ply'))
             if len(cloud.points) == 0 or not np.isfinite(np.asarray(cloud.points)).all():
                 raise RuntimeError('Fusion produced zero points or nonfinite coordinates')
-            summary.update(dense_status='success', dense_points=len(cloud.points))
+            summary.update(dense_status='success', dense_points=len(cloud.points), mesh_status='running')
+            save()
+            progress('dense', 'completed')
+            progress('mesh', 'processing')
             try:
-                command('mesh', 'poisson_mesher', ['--input_path', dense / 'fused.ply', '--output_path', dense / 'mesh.ply', '--PoissonMeshing.depth', '8', '--PoissonMeshing.num_threads', '4'], timeout=600)
+                command('mesh', 'poisson_mesher', ['--input_path', dense / 'fused.ply', '--output_path', dense / 'mesh.ply', '--PoissonMeshing.depth', '8', '--PoissonMeshing.trim', '5', '--PoissonMeshing.num_threads', '4'], timeout=600)
                 mesh = o3d.io.read_triangle_mesh(str(dense / 'mesh.ply'))
                 if not len(mesh.triangles) or not np.isfinite(np.asarray(mesh.vertices)).all():
                     raise RuntimeError('Mesh has no triangles or has nonfinite vertices')
-                from refine_mesh import refine
-                summary['mesh_display'] = refine(run)
+                summary['mesh_vertices'] = len(mesh.vertices)
+                try:
+                    from refine_mesh import refine
+                    summary['mesh_display'] = refine(run)
+                except Exception as exc:
+                    summary['mesh_display_error'] = str(exc)
                 summary['mesh_triangles'] = len(mesh.triangles)
                 summary['mesh_status'] = 'success' if len(mesh.triangles) else 'empty'
+                progress('mesh', 'completed')
                 summary['mesh_caution'] = 'Poisson interpolation may bridge unobserved gaps; mesh is inferred, not validated surface truth.'
             except Exception as exc:
+                if 'mesh' in state:
+                    state['mesh']['success'] = False
+                    write_json(state_path, state)
                 summary.update(mesh_status='failed', mesh_error=str(exc))
+                progress('mesh', 'dependency_missing' if isinstance(exc, DependencyError) else 'failed', exc)
         except Exception as exc:
-            summary.update(dense_status='failed', dense_error=str(exc))
-        summary['stage_seconds'] = {k:v['seconds'] for k,v in state.items()}
+            if 'fusion' in state:
+                state['fusion']['success'] = False
+                write_json(state_path, state)
+            summary.update(dense_status='dependency_missing' if isinstance(exc, DependencyError) else 'failed', dense_error=str(exc), mesh_status='not_started')
+            progress('dense', summary['dense_status'], exc)
+        summary['stage_seconds'] = {k:v.get('seconds', 0) for k,v in state.items()}
         save()
         print(json.dumps(summary, indent=2), flush=True)
 
+    CURRENT['status'] = 'partial' if args.dense and (summary.get('dense_status') != 'success' or summary.get('mesh_status') != 'success') else 'completed'
+    progress()
+
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as exc:
+        if CURRENT:
+            CURRENT['status'] = 'dependency_missing' if isinstance(exc, DependencyError) else 'failed'
+            progress(status=CURRENT['status'], error=exc)
+        print(str(exc), file=sys.stderr)
+        sys.exit(1)

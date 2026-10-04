@@ -19,9 +19,13 @@ def render_extra(page,project,code_root,metadata,selection,summary):
         metrics[1].metric('Sparse points',f"{summary['sparse_points']:,}")
         metrics[2].metric('Dense points',f"{summary['dense_points']:,}" if 'dense_points' in summary else 'Unavailable')
         metrics[3].metric('Mean reprojection error',f"{summary['mean_point_reprojection_error_pixels']:.3f} px")
+        cols = st.columns(3)
+        cols[0].metric('Registered image ratio', f"{summary['registered_images']/summary['input_images']:.1%}" if summary.get('input_images') else 'Unavailable')
+        cols[1].metric('Mesh vertices', summary.get('mesh_vertices', 'Unavailable'))
+        cols[2].metric('Mesh triangles', summary.get('mesh_triangles', 'Unavailable'))
         st.caption('Reconstruction quality metrics. Independent field accuracy has not been measured.')
         path=project/'results/coverage/coverage_report.json'
-        if not path.exists():st.info('Coverage report unavailable. Run the demo report command.');return
+        if not path.exists():st.info('Coverage report unavailable. Re-run reporting for this dataset with scripts/pipeline.py --report PROJECT.');return
         coverage=json.loads(path.read_text())
         cols=st.columns(4)
         cols[0].metric('Registration ratio',f"{coverage['registration_ratio']:.1%}")

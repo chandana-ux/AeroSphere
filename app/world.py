@@ -20,9 +20,13 @@ def geometry(path,mtime,mesh=False):
         ) from exc
     if mesh:
         obj=o3d.io.read_triangle_mesh(path)
+        if not len(obj.vertices) or not len(obj.triangles) or not np.isfinite(np.asarray(obj.vertices)).all():
+            raise ValueError('Mesh is empty, unreadable or has nonfinite coordinates')
         obj.compute_vertex_normals()
         return np.asarray(obj.vertices),np.asarray(obj.vertex_colors),np.asarray(obj.triangles)
     obj=o3d.io.read_point_cloud(path)
+    if not len(obj.points) or not np.isfinite(np.asarray(obj.points)).all():
+        raise ValueError('Point cloud is empty, unreadable or has nonfinite coordinates')
     return np.asarray(obj.points),np.asarray(obj.colors),np.empty((0,3),int)
 
 @st.cache_data
@@ -113,6 +117,10 @@ def render_world(root,summary,selection,metadata):
 
     mesh_path = mesh_path_for_mission(root, run)
     dense_path = run/'dense/fused.ply'
+    if summary.get('mesh_status') in ('failed', 'empty', 'running', 'not_started', 'not_requested'):
+        mesh_path = run / 'unavailable_mesh.ply'
+    if summary.get('dense_status') in ('failed', 'dependency_missing', 'running', 'not_requested'):
+        dense_path = run / 'unavailable_dense.ply'
     mesh_vertices = 0
     mesh_triangles = 0
     dense_points_count = 0
@@ -138,11 +146,11 @@ def render_world(root,summary,selection,metadata):
             mesh_vertices = 0
             mesh_triangles = 0
             mesh_error = f'{type(exc).__name__}: {exc}'
-    if dense_path.exists() and mesh_bounds is None:
+    if dense_path.exists():
         try:
             dense_xyz, _, _ = geometry(str(dense_path), dense_path.stat().st_mtime_ns, mesh=False)
             dense_points_count = len(dense_xyz)
-            if len(dense_xyz):
+            if len(dense_xyz) and mesh_bounds is None:
                 mesh_bounds = (dense_xyz.min(0), dense_xyz.max(0))
         except Exception:
             dense_points_count = 0
@@ -165,16 +173,19 @@ def render_world(root,summary,selection,metadata):
             st.warning(f'Mesh file could not be loaded: {mesh_error}')
     with right:
         st.markdown('<div class="compact-label">View</div>', unsafe_allow_html=True)
-        has_mesh=mesh_path.is_file() and mesh_error is None
+        has_mesh=mesh_path.is_file() and mesh_error is None and mesh_triangles > 0
         has_dense=dense_path.exists()
         has_sparse=(run/'sparse.ply').exists() or bool(points)
-        mesh=st.checkbox('Mesh', value=True if has_mesh else False, key='world_mesh_toggle')
-        dense=st.checkbox('Dense cloud', value=False, key='world_dense_toggle', disabled=not has_dense)
-        sparse=st.checkbox('Sparse cloud', value=False, key='world_sparse_toggle', disabled=not has_sparse)
+        mesh=st.checkbox('Mesh', value=has_mesh, key='world_mesh_toggle', disabled=not has_mesh)
+        dense=st.checkbox('Dense cloud', value=has_dense and not has_mesh, key='world_dense_toggle', disabled=not has_dense)
+        sparse=st.checkbox('Sparse cloud', value=has_sparse and not has_dense and not has_mesh, key='world_sparse_toggle', disabled=not has_sparse)
         wire=st.checkbox('Wireframe', value=False, key='world_wireframe_toggle', disabled=not has_mesh)
         st.markdown('<div class="compact-label" style="margin-top:0.7rem;">Overlays</div>', unsafe_allow_html=True)
         show_cameras=st.checkbox('Cameras', value=False, key='world_cameras_toggle', disabled=cameras.empty)
         trajectory=st.checkbox('Trajectory', value=False, key='world_trajectory_toggle', disabled=cameras.empty)
+        for label, available in [('Mesh / Wireframe', has_mesh), ('Dense cloud', has_dense), ('Sparse cloud', has_sparse)]:
+            if not available:
+                st.caption(label + ' unavailable for this dataset.')
         if cameras.empty:
             st.caption('Camera trajectory unavailable; the mesh can still be inspected.')
         if 'world_evidence_mode' not in st.session_state:
@@ -196,9 +207,11 @@ def render_world(root,summary,selection,metadata):
     model_origin = np.zeros(3, dtype=float)
     if mesh_bounds is not None:
         model_origin = (mesh_bounds[0] + mesh_bounds[1]) / 2.0
-    for enabled,label,relative,is_mesh in [(mesh,'Mesh','dense/mesh_display.ply',True),(dense,'Dense Cloud','dense/fused.ply',False),(sparse or evidence=='Evidence View','Sparse Cloud','sparse.ply',False)]:
+    for enabled,label,relative,is_mesh in [(mesh or wire,'Mesh','dense/mesh_display.ply',True),(dense,'Dense Cloud','dense/fused.ply',False),(sparse or evidence=='Evidence View','Sparse Cloud','sparse.ply',False)]:
         if not enabled or isolate not in ('All enabled',label):continue
         path=run/relative
+        if label == 'Dense Cloud':path=dense_path
+        if is_mesh and not has_mesh:continue
         if is_mesh and not path.exists():path=mesh_path
         if not path.exists():
             with left:st.info(label+' is not available for this reconstruction.')
@@ -218,11 +231,12 @@ def render_world(root,summary,selection,metadata):
         print(f'PLOTLY_COORDS={label}: x_range=({float(display_xyz[:,0].min())},{float(display_xyz[:,0].max())}), y_range=({float(display_xyz[:,1].min())},{float(display_xyz[:,1].max())}), z_range=({float(display_xyz[:,2].min())},{float(display_xyz[:,2].max())})')
         all_xyz.append(display_xyz)
         if is_mesh:
-            fig.add_trace(go.Mesh3d(x=display_xyz[:,0].tolist(),y=display_xyz[:,1].tolist(),z=display_xyz[:,2].tolist(),
-                i=triangles[:,0].tolist(),j=triangles[:,1].tolist(),k=triangles[:,2].tolist(),
-                vertexcolor=(np.clip(colors,0,1)*255).astype(int).tolist() if len(colors) and evidence=='Normal model' else None,
-                color='#dca55e',name=label,flatshading=False,lighting=dict(ambient=.65,diffuse=.85,specular=.12,roughness=.85),
-                hovertemplate='Interpolated surface · click for nearby sparse evidence<extra></extra>'))
+            if mesh:
+                fig.add_trace(go.Mesh3d(x=display_xyz[:,0].tolist(),y=display_xyz[:,1].tolist(),z=display_xyz[:,2].tolist(),
+                    i=triangles[:,0].tolist(),j=triangles[:,1].tolist(),k=triangles[:,2].tolist(),
+                    vertexcolor=(np.clip(colors,0,1)*255).astype(int).tolist() if len(colors) and evidence=='Normal model' else None,
+                    color='#dca55e',name=label,flatshading=False,lighting=dict(ambient=.65,diffuse=.85,specular=.12,roughness=.85),
+                    hovertemplate='Interpolated surface · click for nearby sparse evidence<extra></extra>'))
             counts.append(f'{len(triangles):,} triangles')
             if wire:
                 edges=np.unique(np.sort(np.concatenate([triangles[:,[0,1]],triangles[:,[1,2]],triangles[:,[2,0]]]),axis=1),axis=0)

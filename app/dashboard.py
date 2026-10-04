@@ -14,6 +14,7 @@ import streamlit as st
 APP = Path(__file__).resolve().parent
 sys.path.insert(0, str(APP))
 
+from reconstruction_runtime import find_colmap, write_json
 from ingestion import save_uploads, frame_decisions
 from mission import MODES, catalog, profile, read_json, save_profile
 from geo import gps_distance
@@ -32,17 +33,7 @@ PAGES = ['MISSION', 'FRAMES', 'RECONSTRUCTION', '3D WORLD', 'GEO', 'MEASURE', 'Q
 
 
 def colmap_launcher():
-    configured = os.environ.get('AEROSPHERE_COLMAP')
-    if configured:
-        path = Path(configured).expanduser()
-        return path if path.is_file() else None
-    installed = shutil.which('colmap')
-    if installed:
-        return Path(installed)
-    if os.name == 'nt':
-        path = Path.home() / 'Downloads/colmap-x64-windows-cuda/COLMAP.bat'
-        return path if path.is_file() else None
-    return None
+    return find_colmap()
 
 st.set_page_config(
     page_title='AeroSphere | 3D Reconstruction & Spatial Intelligence',
@@ -59,6 +50,13 @@ def go(page):
 
 def data(root):
     summary = read_json(root / 'output/reconstruction/latest.json')
+    progress = read_json(root / 'reconstruction_progress.json')
+    if summary:
+        run = Path(summary.get('run_directory', '')).resolve()
+        if not run.is_relative_to(root.resolve()) or (progress and progress.get('run_directory') != str(run)):
+            summary = {}
+        elif not (run / 'sparse.ply').is_file():
+            summary = {}
     selection = read_json(root / 'results/image_intelligence/latest.json')
     try:
         meta = pd.read_csv(root / 'metadata/image_metadata.csv')
@@ -140,6 +138,11 @@ def project_status(active, summary, selection):
             stats['STATUS'] = 'FRAME ANALYSIS READY'
         else:
             stats['STATUS'] = 'PENDING'
+    progress = read_json(active / 'reconstruction_progress.json')
+    worker = read_json(active / 'reconstruction_job.json') or read_json(active / 'job.json')
+    current = progress.get('status') or worker.get('status')
+    if current in ('processing', 'running', 'failed', 'dependency_missing', 'partial'):
+        stats['STATUS'] = current.replace('_', ' ').upper()
     return stats
 
 
@@ -168,7 +171,7 @@ def mission_library(items):
 
 def setup(root, selection, meta):
     current = profile(root)
-    summary = read_json(root / 'output/reconstruction/latest.json')
+    summary, _, _ = data(root)
 
     st.markdown('<div class="workspace-panel"><div class="compact-label">Mission input</div></div>', unsafe_allow_html=True)
     st.markdown('<div class="compact-label" style="margin: 0.4rem 0 0.5rem;">INPUT → ANALYZE → RECONSTRUCT → 3D WORLD</div>', unsafe_allow_html=True)
@@ -195,6 +198,12 @@ def setup(root, selection, meta):
         cap = st.number_input('Maximum frames', min_value=3, max_value=300, value=80)
         st.caption('Samples are analyzed for sharpness, exposure, features and redundancy. A frame cap may shorten the processed flight.')
 
+    auto_reconstruct = st.checkbox('Reconstruct after frame analysis', value=True)
+    build_dense = st.checkbox('Also build dense cloud and mesh', value=True)
+    cpu_features = st.checkbox('Use CPU for features and matching', value=True)
+    shared_camera = st.checkbox('Same camera lens and zoom throughout', value=False, key='input_shared_camera')
+    st.caption('Enable shared intrinsics for a fixed-lens video; leave off for mixed cameras or changing zoom.')
+
     if st.button('Analyze flight', type='primary', use_container_width=True):
         try:
             if uploaded:
@@ -205,7 +214,7 @@ def setup(root, selection, meta):
                     raise ValueError('Upload a file or select an existing local source.')
                 if is_video and not path.is_file():
                     raise ValueError('Select a video file.')
-                if not is_video and not path.is_dir():
+                if source_type == 'UPLOAD IMAGE SEQUENCE' and not path.is_dir():
                     raise ValueError('Select an image folder.')
             job = ROOT / 'results/jobs' / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S_%fZ')
             job.mkdir(parents=True)
@@ -219,8 +228,12 @@ def setup(root, selection, meta):
                 '--interval', str(interval),
                 '--max-frames', str(cap)
             ]
-            if colmap_launcher():
-                command.extend(['--reconstruct', '--dense'])
+            if auto_reconstruct:
+                command.extend(['--reconstruct', '--camera-sharing', 'single' if shared_camera else 'auto'])
+                if cpu_features:
+                    command.append('--cpu')
+                if build_dense:
+                    command.append('--dense')
             with (job / 'worker.log').open('w') as log:
                 subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, cwd=CODE, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             st.session_state['active_root'] = str(job)
@@ -387,12 +400,15 @@ def flight(root, summary, selection, meta):
     st.button('Continue to reconstruction', type='primary', on_click=go, args=('RECONSTRUCTION',))
 
 
+@st.fragment(run_every='3s')
 def reconstruction(root, summary, selection):
+    summary, selection, _ = data(root)
     st.markdown('<div class="workspace-panel"><div class="compact-label">Reconstruction / pipeline</div></div>', unsafe_allow_html=True)
     state = read_json(root / 'reconstruction_job.json')
     input_job = read_json(root / 'job.json')
-    if input_job.get('status') == 'failed' and state.get('status') != 'running':
+    if input_job.get('status') == 'failed' and not state:
         state = input_job
+    progress = read_json(root / 'reconstruction_progress.json')
     summary = summary or {}
     run_dir = Path(summary.get('run_directory', root / 'results'))
     sparse_path = run_dir / 'sparse.ply'
@@ -425,33 +441,32 @@ def reconstruction(root, summary, selection):
     if mesh_triangles is None:
         mesh_triangles = mesh_header.get(b'face')
 
-    sparse_available = sparse_path.is_file() or sparse_points is not None
-    dense_available = dense_path.is_file() or (dense_points is not None and summary.get('dense_status') in ('success', 'available'))
-    mesh_available = mesh_path.is_file() or (mesh_triangles is not None and int(mesh_triangles) > 0)
+    sparse_available = bool(sparse_header.get(b'vertex', 0))
+    dense_available = bool(dense_header.get(b'vertex', 0)) and summary.get('dense_status') == 'success'
+    mesh_available = bool(mesh_header.get(b'face', 0)) and (summary.get('mesh_status') == 'success' or root.resolve() == CODE.resolve())
     job_status = state.get('status')
-    sparse_status = 'AVAILABLE' if sparse_available else ('RUNNING' if job_status == 'running' else 'FAILED' if job_status == 'failed' else 'PENDING')
     dense_status = summary.get('dense_status')
-    if dense_available:
-        dense_state = 'AVAILABLE'
-    elif dense_status == 'running':
-        dense_state = 'RUNNING'
-    elif dense_status == 'failed':
-        dense_state = 'FAILED'
-    elif job_status == 'failed' and not sparse_available:
-        dense_state = 'BLOCKED'
-    else:
-        dense_state = 'PENDING'
-    mesh_status = summary.get('mesh_status')
-    if mesh_available:
-        mesh_state = 'AVAILABLE'
-    elif mesh_status == 'running':
-        mesh_state = 'RUNNING'
-    elif mesh_status in ('failed', 'empty'):
-        mesh_state = 'FAILED'
-    elif dense_status == 'failed':
-        mesh_state = 'BLOCKED'
-    else:
-        mesh_state = 'PENDING'
+    labels = {'processing':'PROCESSING', 'completed':'COMPLETED', 'failed':'FAILED',
+              'dependency_missing':'DEPENDENCY MISSING', 'not_started':'NOT STARTED'}
+    def stage_label(stage, available):
+        value = progress.get('stages', {}).get(stage)
+        if value:
+            if value == 'completed' and not available:
+                return 'FAILED (OUTPUT MISSING)'
+            return labels.get(value, value.upper())
+        if available:
+            return 'COMPLETED'
+        if stage == 'sparse':
+            if job_status in ('running', 'processing'):
+                return 'PROCESSING'
+            if job_status == 'failed':
+                return 'FAILED'
+            if selection and not colmap_launcher():
+                return 'DEPENDENCY MISSING'
+        return 'NOT STARTED'
+    sparse_status = stage_label('sparse', sparse_available)
+    dense_state = stage_label('dense', dense_available)
+    mesh_state = stage_label('mesh', mesh_available)
 
     registered_text = count_text(registered)
     if selected_images is not None:
@@ -489,6 +504,15 @@ def reconstruction(root, summary, selection):
     st.markdown('<div class="thin-divider"></div>', unsafe_allow_html=True)
     if state:
         st.caption('Processing status · ' + state.get('status', 'unknown').upper() + ' · ' + state.get('stage', ''))
+    if state.get('report_error'):
+        st.warning('Geometry is saved, but additional reporting failed: ' + state['report_error'])
+    if progress.get('error'):
+        st.error(progress['error'])
+    if progress.get('command'):
+        st.caption('Latest COLMAP step: ' + progress['command'])
+    if progress.get('status') == 'processing':
+        done = sum(value == 'completed' for value in progress.get('stages', {}).values())
+        st.progress(min(done / 3, 1.0), text='Completed reconstruction stages (not a time estimate)')
     if state.get('status') == 'failed':
         detail = state.get('error') or state.get('diagnostic') or 'No additional failure details were recorded.'
         st.error(f"Processing failed during {state.get('stage', 'an unknown stage')}: {detail}")
@@ -503,31 +527,31 @@ def reconstruction(root, summary, selection):
         st.info('Analyze an image folder or video in Mission setup. Stage indicators above reflect only saved reconstruction artifacts and job status.')
         return
 
-    if state.get('status') == 'running':
+    running = state.get('status') in ('running', 'processing') or progress.get('status') == 'processing'
+    if running:
         st.info('Reconstruction is running locally. Refresh to update. Sparse geometry is saved before dense processing.')
     elif summary:
         st.success('Available geometry is ready to inspect.')
         st.button('Open 3D World', type='primary', on_click=go, args=('3D WORLD',), use_container_width=True)
         if summary.get('dense_status') not in (None, 'success'):
             st.warning('Dense processing did not complete; sparse output is available.')
+        elif summary.get('mesh_status') not in (None, 'success'):
+            st.warning('Mesh processing did not complete; point clouds remain available.')
         with st.expander('Technical details'):
             st.json(summary)
-    else:
+    if not running:
         if not colmap_launcher():
+            st.caption('See LOCAL_VIDEO_3D_QUICKSTART.md. Set AEROSPHERE_COLMAP to your COLMAP launcher and restart the app.')
             st.info('The precomputed demo model remains available in 3D World. New reconstruction is disabled because COLMAP is not installed in this runtime.')
             st.caption('This mission has input-derived frame analysis only; the bundled model is a separate precomputed demo, not a reconstruction of these frames.')
-            if root.resolve() != CODE.resolve() and (CODE / 'results/dense/mesh.ply').is_file():
-                if st.button('Open precomputed 3D demo', key='open_precomputed_demo'):
-                    st.session_state['active_root'] = str(CODE)
-                    st.session_state['nav'] = '3D WORLD'
-                    st.rerun()
         else:
             dense = st.checkbox('Build dense cloud and mesh', True)
-            cpu = st.checkbox('CPU feature extraction and matching', False)
+            cpu = st.checkbox('CPU feature extraction and matching', True)
+            shared_camera = st.checkbox('Same camera lens and zoom throughout', False, key='recon_shared_camera')
             st.caption('Dense stereo requires CUDA. CPU mode applies to feature extraction and matching only.')
-            if st.button('Start 3D reconstruction', type='primary', disabled=selection['selected_images'] < 3, use_container_width=True):
-                (root / 'reconstruction_job.json').write_text(json.dumps({'status': 'running', 'stage': 'queued'}))
-                command = [sys.executable, str(CODE / 'scripts/reconstruct_job.py'), '--project', str(root)]
+            if st.button('Start 3D reconstruction', type='primary', disabled=selection['selected_images'] < 3 or (root / 'reconstruction.lock').exists(), use_container_width=True):
+                write_json(root / 'reconstruction_job.json', {'status': 'running', 'stage': 'queued'})
+                command = [sys.executable, str(CODE / 'scripts/reconstruct_job.py'), '--project', str(root), '--camera-sharing', 'single' if shared_camera else 'auto']
                 if dense:
                     command.append('--dense')
                 if cpu:
@@ -535,6 +559,13 @@ def reconstruction(root, summary, selection):
                 with (root / 'reconstruction_worker.log').open('w') as log:
                     subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, cwd=CODE, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
                 st.success('Reconstruction started. Refresh to follow the stages.')
+
+    if root.resolve() != CODE.resolve() and (CODE / 'results/dense/mesh.ply').is_file():
+        if st.button('Open precomputed 3D demo', key='open_precomputed_demo'):
+            st.session_state['active_root'] = str(CODE)
+            st.session_state['nav'] = '3D WORLD'
+            st.rerun()
+
 
 def render_context_panel(page, root, summary, selection, meta):
     st.markdown('<div class="context-panel"><div class="small-label">Context</div>', unsafe_allow_html=True)
@@ -574,6 +605,23 @@ def render_context_panel(page, root, summary, selection, meta):
     st.markdown('</div>', unsafe_allow_html=True)
 
 
+def render_geometry_summary(summary):
+    st.subheader('Reconstructed scene statistics')
+    run = Path(summary['run_directory'])
+    for label, relative, mesh in [('Mesh', 'dense/mesh.ply', True), ('Dense cloud', 'dense/fused.ply', False), ('Sparse cloud', 'sparse.ply', False)]:
+        path = run / relative
+        if not path.is_file():
+            continue
+        try:
+            xyz, _, triangles = geometry(str(path), path.stat().st_mtime_ns, mesh)
+            if len(xyz):
+                st.write(f'{label}: {len(xyz):,} points/vertices; {len(triangles):,} triangles.')
+                st.dataframe(pd.DataFrame({'Axis':['X','Y','Z'], 'Minimum':xyz.min(0), 'Maximum':xyz.max(0), 'Extent':xyz.max(0)-xyz.min(0)}), hide_index=True)
+        except (OSError, ValueError, RuntimeError) as exc:
+            st.info(f'{label} statistics unavailable: {exc}')
+    st.caption('Bounds describe reconstructed geometry in arbitrary model units. They do not establish building dimensions, semantic identities or complete scene coverage.')
+
+
 def main():
     apply_workspace_theme()
     items = catalog(ROOT)
@@ -597,7 +645,7 @@ def main():
     st.sidebar.markdown('<div class="thin-divider"></div>', unsafe_allow_html=True)
     active = Path(st.session_state.get('active_root', ROOT))
     if not active.exists():
-        active = ROOT
+        st.warning(f'The selected dataset folder is missing: {active}. Choose another mission; no example geometry is substituted.')
     options = {str(m['root']): m['name'] for m in items}
     if str(active) not in options:
         options[str(active)] = active.name
@@ -608,7 +656,7 @@ def main():
         active = Path(chosen)
 
     if st.session_state.get('world_root') != str(active):
-        for key in ('world_point', 'world_point_picker', 'world_scope', 'world_event', 'world_source'):
+        for key in ('world_point', 'world_point_picker', 'world_scope', 'world_event', 'world_source', 'world_mesh_toggle', 'world_dense_toggle', 'world_sparse_toggle', 'world_wireframe_toggle', 'world_cameras_toggle', 'world_trajectory_toggle', 'measure_A', 'measure_B', 'measure_C', 'mesh_measure_a', 'mesh_measure_b', 'mesh_measure_c'):
             st.session_state.pop(key, None)
         st.session_state['world_root'] = str(active)
 
@@ -616,11 +664,9 @@ def main():
     mission = profile(active)
     demo_mesh_available = (active / 'results/dense/mesh.ply').is_file()
     job_state = read_json(active / 'job.json')
-    header_status = 'READY' if summary or demo_mesh_available or selection else (
-        'FAILED' if job_state.get('status') == 'failed' else
-        'PROCESSING' if job_state.get('status') in ('processing', 'running') else
-        'PENDING'
-    )
+    header_status = project_status(active, summary, selection)['STATUS']
+    if demo_mesh_available and not summary:
+        header_status = 'PRECOMPUTED EXAMPLE'
     st.sidebar.caption(mission.get('mode', 'RECONNAISSANCE'))
     st.sidebar.markdown('<div class="compact-label">Local processing</div>', unsafe_allow_html=True)
     if demo_mesh_available and not summary:
@@ -672,7 +718,17 @@ def main():
         left, right = st.columns([3.2, 1.05])
         with left:
             if summary and selection:
-                render_legacy('Geospatial', active, CODE)
+                trajectory_path = Path(summary['run_directory']) / 'camera_trajectory.csv'
+                if trajectory_path.is_file():
+                    positions = pd.read_csv(trajectory_path)
+                    st.subheader('Reconstructed camera positions')
+                    st.caption('Relative COLMAP coordinates; axes and scale are not geographic directions or metres.')
+                    st.plotly_chart(px.scatter_3d(positions, x='x', y='y', z='z', hover_name='filename'), width='stretch')
+                    st.dataframe(positions[['filename', 'x', 'y', 'z']], hide_index=True)
+                if len(meta.dropna(subset=['latitude', 'longitude'])):
+                    render_legacy('Geospatial', active, CODE)
+                else:
+                    st.info('No GPS observations accompany this dataset. Relative camera positions are shown above.')
             elif selection:
                 gps = meta.dropna(subset=['latitude', 'longitude'])
                 gps = gps[gps.latitude.between(-90, 90) & gps.longitude.between(-180, 180)]
@@ -749,7 +805,10 @@ def main():
         left, right = st.columns([3.2, 1.05])
         with left:
             if summary:
-                render_extra('Quality & Coverage', active, CODE, meta, selection, summary)
+                try:
+                    render_extra('Quality & Coverage', active, CODE, meta, selection, summary)
+                except (OSError, ValueError, KeyError, IndexError) as exc:
+                    st.warning(f'Additional quality artifacts unavailable: {exc}')
             elif selection:
                 quality = input_quality(active, selection)
                 if quality.empty:
@@ -798,7 +857,11 @@ def main():
                     st.dataframe(row.reindex(fields).rename('Value').astype(str).replace('nan', 'Unavailable').to_frame(), width='stretch')
                     st.caption('Quality scores and warnings are input-derived heuristics, not detection certainty or reconstruction confidence.')
                     if summary:
-                        render_lineage(active, summary, selection)
+                        render_geometry_summary(summary)
+                        try:
+                            render_lineage(active, summary, selection)
+                        except (OSError, ValueError, KeyError, IndexError) as exc:
+                            st.info(f'Sparse observation lineage unavailable: {exc}')
                     else:
                         st.info('Sparse-point image lineage becomes available after an actual COLMAP reconstruction. No 3D points are inferred from frame-quality scores.')
                     with st.expander('Optional local object predictions'):

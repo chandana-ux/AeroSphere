@@ -20,7 +20,10 @@ def read_json(path, default=None):
         return {} if default is None else default
 
 def profile(root):
-    return read_json(Path(root)/'mission.json', {'name': 'Aukerman aerial survey', 'mode': 'URBAN MAPPING', 'category': 'URBAN'})
+    root = Path(root)
+    source = read_json(root/'job.json').get('source')
+    name = Path(source).stem if source else ('Precomputed example' if root.resolve() == Path(__file__).resolve().parents[1] else root.name)
+    return read_json(root/'mission.json', {'name': name, 'mode': 'URBAN MAPPING', 'category': 'URBAN'})
 
 def save_profile(root, name, mode):
     if mode not in MODES:
@@ -49,9 +52,12 @@ def catalog(code_root):
             continue  # Test fixtures never masquerade as mission observations.
         if root != Path(code_root) and not (selection or recon or job):
             continue
-        p = profile(root) if (root/'mission.json').exists() or root == Path(code_root) else {'name': 'Mission '+root.name, 'mode':'RECONNAISSANCE', 'category':'URBAN'}
+        p = profile(root)
+        progress = read_json(root/'reconstruction_progress.json')
+        if recon and (not Path(recon.get('run_directory', '')).resolve().is_relative_to(root.resolve()) or not (Path(recon.get('run_directory', ''))/'sparse.ply').is_file()):
+            recon = {}
         result.append({'root':root, **p, 'images':selection.get('input_images',0),
-                       'status':'3D ready' if recon else job.get('status','Awaiting input'),
+                       'status':progress.get('status') or ('3D ready' if recon else job.get('status','Awaiting input')),
                        'capture':'Video' if (root/'video_ingestion/video_metadata.json').exists() else 'Images'})
     name_counts = {}
     for item in result:

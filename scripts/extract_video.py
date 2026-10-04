@@ -4,6 +4,8 @@ import csv
 import json
 import math
 import time
+import shutil
+import subprocess
 from pathlib import Path
 import cv2
 
@@ -18,7 +20,23 @@ def extract_video(source, output, interval=2.0, max_frames=300, max_dimension=12
         raise ValueError('Choose a generated output directory outside the raw video directory')
     if output.exists():
         raise ValueError('Output directory already exists; use a fresh job directory')
-    cap=cv2.VideoCapture(str(source))
+    probe = {}
+    ffprobe = shutil.which('ffprobe')
+    if ffprobe:
+        try:
+            result = subprocess.run([ffprobe, '-v', 'error', '-select_streams', 'v:0',
+                '-show_entries', 'stream=codec_name,width,height,avg_frame_rate:format=duration',
+                '-of', 'json', str(source)], capture_output=True, text=True, timeout=30,
+                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            if result.returncode == 0:
+                probe = json.loads(result.stdout)
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            pass
+    # OpenCV's FFmpeg decoder preserves presentation timestamps without a lossy transcode.
+    cap=cv2.VideoCapture(str(source), cv2.CAP_FFMPEG)
+    if not cap.isOpened():
+        cap.release()
+        cap=cv2.VideoCapture(str(source))
     if not cap.isOpened():
         cap.release()
         raise ValueError('Video could not be opened: invalid file, unsupported codec, or empty container')
@@ -29,7 +47,7 @@ def extract_video(source, output, interval=2.0, max_frames=300, max_dimension=12
     count=int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     codec=int(cap.get(cv2.CAP_PROP_FOURCC))
     codec=''.join(chr((codec >> (8*i)) & 255) for i in range(4)).strip('\x00') or None
-    report=dict(source=str(source),input_type='video',fps=fps,reported_frame_count=count if count>0 else None,
+    report=dict(decoder=cap.getBackendName(), ffprobe=probe, source=str(source),input_type='video',fps=fps,reported_frame_count=count if count>0 else None,
                 reported_duration_s=count/fps if count>0 and fps else None,codec=codec,
                 width=int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),height=int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
                 gps_status='GPS/telemetry unavailable',timestamp_policy='Decoder presentation time where advancing; otherwise frame_index / reported FPS (estimated).',

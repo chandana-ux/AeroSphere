@@ -6,6 +6,15 @@ Drone video → intelligent frame analysis → informative frame selection → a
 
 Local Python/Streamlit application using OpenCV, COLMAP CUDA, Open3D and bundled Plotly. Processing works offline after dependencies and optional model weights are installed. The original aerial-photo pipeline remains available.
 
+
+## Local reconstruction from your own videos
+
+For Windows COLMAP installation/detection, bounded frame sampling, independent stage status,
+per-dataset geometry, camera-sharing settings and exact run/test commands, see
+[Local video reconstruction quickstart](LOCAL_VIDEO_3D_QUICKSTART.md).
+Measured results and limitations are in [Local reconstruction validation](docs/LOCAL_RECONSTRUCTION_VALIDATION.md).
+
+
 ## Start on this laptop
 
 Double-click `run_aerosphere.bat`, or run `py -3.11 run_aerosphere.py`.
@@ -16,13 +25,13 @@ Large existing datasets and some reconstruction artifacts remain on D:; local JS
 
 ## Mission workflow
 
-1. **HOME** — new mission, demo mission or mission library.
-2. **MISSION** — upload MP4/MOV/AVI/MKV, upload an image sequence, or use a local file/folder. Save mission name and mode. Codec support depends on OpenCV. Upload limit is 512 MB per file; use a local path for larger videos.
-3. **FLIGHT INTELLIGENCE** — duration, resolution, FPS, sampling counts, selection timeline and actual source thumbnails. Inspect sharpness, brightness, contrast, exposure, feature count and each decision.
-4. **RECONSTRUCTION** — explicitly start selected-frame processing. COLMAP estimates cameras and sparse structure; optional CUDA stereo/fusion produces a dense cloud and Poisson mesh. Errors retain diagnostics and available sparse geometry.
-5. **3D WORLD** — orbit, pan, zoom, fit/reset, model-axis viewpoints, colored mesh, wireframe, dense/sparse points and camera trajectory. GEO, MEASURE and optional historical context remain in this workspace.
-6. **INTELLIGENCE** — exact sparse tracks and source pixels, approximate support/coverage reports and mission-specific review priorities. Optional cached generic COCO predictions.
-7. **EXPORT** — full-resolution available geometry, tracks, metadata, reports and checksum manifest in a ZIP. Source photographs are not included.
+1. **MISSION** — name a mission, choose its mode, and upload MP4/MOV/AVI/MKV or an image sequence, or select an existing local path. Each input gets a separate mission/output folder. Upload limit is 512 MB per file; use a path for larger videos.
+2. **FRAMES** — inspect the input-specific duration, resolution, FPS, frame timestamps, thumbnails, selection counts and image-quality reasons. Sampling uses decoded timestamps/FPS and records truncation when the configured frame cap is reached.
+3. **RECONSTRUCTION** — analyze frames, then run COLMAP 4.2 sparse reconstruction. Dense stereo/Poisson mesh is optional and requires a compatible NVIDIA/CUDA runtime. Per-stage progress, command logs and failures are kept with that mission. If COLMAP is missing, new reconstruction is disabled and the separate precomputed mesh demo is clearly labeled.
+4. **3D WORLD** — inspect only the selected mission’s available sparse cloud, dense cloud, mesh, wireframe and camera path. Missing/failed outputs remain unavailable; another dataset’s demo mesh is never substituted.
+5. **GEO / MEASURE / QUALITY / INTELLIGENCE** — display source GPS or relative camera/mesh coordinates; measure actual mesh/sparse geometry in native units; review reconstruction counts and reprojection error; inspect selected-frame evidence and sparse tracks. These outputs are not metre-accurate or semantic facts. Optional COCO detection requires cached local weights.
+
+Not every video is suitable for photogrammetry: a fixed camera, pure panning, moving subjects, low texture, blur, cuts, or insufficient overlap can prevent an initial camera pair or produce incomplete geometry. See the measured successes and genuine failure in [Local reconstruction validation](docs/LOCAL_RECONSTRUCTION_VALIDATION.md).
 
 ## Frame selection
 
@@ -32,8 +41,9 @@ The analyzer rejects unreadable inputs, exact duplicates, very conservative near
 
 ## Implemented, validated, provisional, future
 
-- **Implemented:** upload and path ingestion, bounded sampling, frame analysis/gallery/timeline, actual reconstruction, local interactive viewer, camera poses/trajectory, sparse evidence, mission profiles, exports, GPS context and model-space measurements.
-- **Validated:** see `FINAL_VALIDATION.md` for the real local video run, the existing 77-image regression, automated tests and browser results. Synthetic codec fixtures are never represented as drone flights.
+- **Implemented:** per-mission upload/path ingestion, bounded video sampling, frame analysis/gallery/timeline, COLMAP sparse and optional dense/mesh reconstruction, mission-scoped 3D viewer, camera positions/trajectory, GPS/relative-coordinate views, geometry measurements and input-derived quality/intelligence pages.
+- **Validated:** [local reconstruction validation](docs/LOCAL_RECONSTRUCTION_VALIDATION.md) records two distinct aerial-video runs with verified sparse, dense and mesh PLYs, plus the fixed-camera clip's actual sparse-initialization failure. `scripts/verify_local_datasets.py` checks source/frame provenance, geometry and all eight sidebar pages/viewer modes. Synthetic codec fixtures are reported separately from real footage.
+- **Not currently exposed in navigation:** `mission.package_mission()` can build a checksummed ZIP from completed artifacts, but the workspace Export button does not yet invoke it. Optional COCO detection requires separately cached weights.
 - **Provisional:** EXIF-based horizontal alignment; model coordinates remain arbitrary. Coverage is a support grid, not scene completeness. Mesh/dense clicks find nearby sparse evidence, not exact surface lineage. Mesh colors come from fused-cloud vertices, not UV textures.
 - **Future:** surveyed metric accuracy, physical height, RTK/PPK/IMU synchronization, exact dense-surface provenance, aerial-specific semantic models and independently validated change detection. A historical comparison workflow exists, but no genuine historical pair is supplied.
 
@@ -51,12 +61,14 @@ py -3.11 -m venv .venv
 
 Default COLMAP launcher: `%USERPROFILE%\Downloads\colmap-x64-windows-cuda\COLMAP.bat`. CLI `--colmap` overrides it. Dense defaults are bounded for the GTX 1650 Ti 4 GB (1200 px, five stereo iterations, six source views); CPU mode applies only to sparse extraction/matching. Geometry quality and runtime depend on overlap, motion, texture and hardware. Clean installation on another computer remains unverified.
 
-The 77-photo baseline is the CC0 OpenDroneMap Aukerman dataset: https://github.com/OpenDroneMap/odm_data_aukerman . Download separately into `input/aukerman/` if reproducing that baseline. Local pointers are machine-specific; generate new artifacts on a new installation.
+The 77-photo CC0 OpenDroneMap Aukerman baseline remains useful for the photo-only regression: https://github.com/OpenDroneMap/odm_data_aukerman . It is separate from the two validated local video datasets. Local inputs and reconstruction outputs are machine-specific and excluded from Git.
 
 ## Tests
 
 ```powershell
 & .\.venv\Scripts\python.exe -m unittest discover -s scripts -p "test_*.py" -v
+& .\.venv\Scripts\python.exe scripts\check_runtime.py
+& .\.venv\Scripts\python.exe scripts\verify_local_datasets.py results\jobs\validation_video_1 results\jobs\validation_video_2_shared results\jobs\validation_outdoor_fixed
 ```
 
 Real-artifact tests require prepared baseline geometry, metadata and optional cached weights. Pure fixture tests can run separately (`test_ingestion.py`, `test_image_intelligence.py`, `test_reconstruction.py`). See validation documentation for exact results, including initial failures.

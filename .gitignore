@@ -86,3 +86,5 @@ id_ed25519*
 /config/local.json
 /demo_mission.json
 /mission.json
+
+/tools/
