@@ -14,7 +14,7 @@ import streamlit as st
 APP = Path(__file__).resolve().parent
 sys.path.insert(0, str(APP))
 
-from reconstruction_runtime import find_colmap, write_json
+from reconstruction_runtime import find_colmap, write_json, worker_alive
 from ingestion import save_uploads, frame_decisions
 from mission import MODES, catalog, profile, read_json, save_profile
 from geo import gps_distance
@@ -46,6 +46,35 @@ st.set_page_config(
 
 def go(page):
     st.session_state['nav'] = page
+
+
+def live_reconstruction_progress(root):
+    progress = read_json(root / 'reconstruction_progress.json')
+    if progress.get('status') == 'processing':
+        lock = root / 'reconstruction.lock'
+        try:
+            pid = int(lock.read_text().strip())
+        except (OSError, ValueError):
+            pid = progress.get('pid')
+        if pid and not worker_alive(pid):
+            progress['status'] = 'failed'
+            progress.setdefault('stages', {})[progress.get('stage', 'sparse')] = 'failed'
+            progress['error'] = 'Reconstruction worker exited before saving a final status. Inspect the worker and COLMAP logs, then retry.'
+    return progress
+
+
+@st.fragment(run_every='3s')
+def watch_reconstruction(root):
+    progress = live_reconstruction_progress(root)
+    signature = (progress.get('run_directory'), progress.get('status'),
+                 tuple(sorted(progress.get('stages', {}).items())))
+    key = 'reconstruction_watch_' + str(root)
+    previous = st.session_state.get(key)
+    st.session_state[key] = signature
+    if previous is not None and previous != signature:
+        if progress.get('status') == 'completed' and st.session_state.get('nav') == 'RECONSTRUCTION':
+            st.session_state['nav'] = '3D WORLD'
+        st.rerun()
 
 
 def data(root):
@@ -138,7 +167,7 @@ def project_status(active, summary, selection):
             stats['STATUS'] = 'FRAME ANALYSIS READY'
         else:
             stats['STATUS'] = 'PENDING'
-    progress = read_json(active / 'reconstruction_progress.json')
+    progress = live_reconstruction_progress(active)
     worker = read_json(active / 'reconstruction_job.json') or read_json(active / 'job.json')
     current = progress.get('status') or worker.get('status')
     if current in ('processing', 'running', 'failed', 'dependency_missing', 'partial'):
@@ -408,7 +437,9 @@ def reconstruction(root, summary, selection):
     input_job = read_json(root / 'job.json')
     if input_job.get('status') == 'failed' and not state:
         state = input_job
-    progress = read_json(root / 'reconstruction_progress.json')
+    progress = live_reconstruction_progress(root)
+    if progress.get('status'):
+        state = {**state, 'status': progress['status'], 'stage': progress.get('stage', '')}
     summary = summary or {}
     run_dir = Path(summary.get('run_directory', root / 'results'))
     sparse_path = run_dir / 'sparse.ply'
@@ -510,6 +541,14 @@ def reconstruction(root, summary, selection):
         st.error(progress['error'])
     if progress.get('command'):
         st.caption('Latest COLMAP step: ' + progress['command'])
+        log_root = Path(progress.get('run_directory', root / 'results'))
+        log_path = log_root / 'logs' / (progress['command'] + '.log')
+        if log_root.resolve().is_relative_to(root.resolve()) and log_path.is_file():
+            with log_path.open('rb') as stream:
+                stream.seek(max(0, log_path.stat().st_size - 1500))
+                lines = stream.read().decode('utf-8', errors='replace').strip().splitlines()
+            if lines:
+                st.caption('Latest worker output: ' + lines[-1])
     if progress.get('status') == 'processing':
         done = sum(value == 'completed' for value in progress.get('stages', {}).values())
         st.progress(min(done / 3, 1.0), text='Completed reconstruction stages (not a time estimate)')
@@ -529,7 +568,7 @@ def reconstruction(root, summary, selection):
 
     running = state.get('status') in ('running', 'processing') or progress.get('status') == 'processing'
     if running:
-        st.info('Reconstruction is running locally. Refresh to update. Sparse geometry is saved before dense processing.')
+        st.info('Reconstruction is running locally. Status updates automatically. Sparse geometry is saved before dense processing.')
     elif summary:
         st.success('Available geometry is ready to inspect.')
         st.button('Open 3D World', type='primary', on_click=go, args=('3D WORLD',), use_container_width=True)
@@ -583,7 +622,9 @@ def render_context_panel(page, root, summary, selection, meta):
             st.write('No frame selection available')
     elif page == 'RECONSTRUCTION':
         st.write('Pipeline state')
-        st.write(f"Reconstruction: {'Available' if summary else 'Pending'}")
+        progress = live_reconstruction_progress(root)
+        pipeline_state = progress.get('status') or ('Available' if summary else 'Pending')
+        st.write('Reconstruction: ' + pipeline_state.replace('_', ' ').title())
         if summary:
             st.write(f"Sparse points: {summary.get('sparse_points', 'N/A'):,}" if isinstance(summary.get('sparse_points'), (int, float)) else f"Sparse points: {summary.get('sparse_points', 'N/A')}")
     elif page == 'GEO':
@@ -643,7 +684,25 @@ def main():
                 page = nav_page
 
     st.sidebar.markdown('<div class="thin-divider"></div>', unsafe_allow_html=True)
-    active = Path(st.session_state.get('active_root', ROOT))
+    if 'active_root' not in st.session_state:
+        # The repository root is a mesh-only example, not the latest local mission.
+        # Select a valid reconstruction once; subsequent user selections stay explicit.
+        reconstructed = []
+        for item in items:
+            root = item['root']
+            summary = data(root)[0] if root != ROOT else {}
+            if not summary or summary.get('dense_status') not in ('success', 'completed'):
+                continue
+            run = Path(summary['run_directory'])
+            if all(ply_header_counts(run / path).get(b'vertex', 0) > 0
+                   for path in ('sparse.ply', 'dense/fused.ply')):
+                reconstructed.append(root)
+        st.session_state['active_root'] = str(max(
+            reconstructed,
+            key=lambda root: (root / 'output/reconstruction/latest.json').stat().st_mtime,
+            default=ROOT,
+        ))
+    active = Path(st.session_state['active_root'])
     if not active.exists():
         st.warning(f'The selected dataset folder is missing: {active}. Choose another mission; no example geometry is substituted.')
     options = {str(m['root']): m['name'] for m in items}
@@ -660,6 +719,7 @@ def main():
             st.session_state.pop(key, None)
         st.session_state['world_root'] = str(active)
 
+    watch_reconstruction(active)
     summary, selection, meta = data(active)
     mission = profile(active)
     demo_mesh_available = (active / 'results/dense/mesh.ply').is_file()
@@ -671,6 +731,8 @@ def main():
     st.sidebar.markdown('<div class="compact-label">Local processing</div>', unsafe_allow_html=True)
     if demo_mesh_available and not summary:
         processing_caption = 'Bundled precomputed mesh demo; it is not reconstructed from another mission.'
+    elif header_status in ('PROCESSING', 'RUNNING'):
+        processing_caption = 'This mission is being reconstructed. Status updates automatically.'
     elif summary:
         processing_caption = 'This mission has saved reconstruction outputs.'
     elif selection:

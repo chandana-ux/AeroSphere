@@ -10,6 +10,33 @@ import uuid
 CODE = Path(__file__).resolve().parents[1]
 
 
+def worker_alive(pid):
+    """Check liveness without signalling a Windows worker (os.kill would terminate it)."""
+    if os.name == 'nt':
+        import ctypes
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = kernel.OpenProcess(0x1000, False, int(pid))
+        if not handle:
+            return ctypes.get_last_error() == 5  # Access denied is not proof of exit.
+        try:
+            code = wintypes.DWORD()
+            return not kernel.GetExitCodeProcess(handle, ctypes.byref(code)) or code.value == 259
+        finally:
+            kernel.CloseHandle(handle)
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
 def write_json(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -38,6 +65,47 @@ def find_colmap(explicit=None):
 
 class DependencyError(RuntimeError):
     pass
+
+
+def sparse_model_files(folder):
+    """Return a complete COLMAP model file set, preferring binary as COLMAP does."""
+    folder = Path(folder)
+    for suffix in ('bin', 'txt'):
+        files = [folder / f'{name}.{suffix}' for name in ('cameras', 'images', 'points3D')]
+        if all(path.is_file() and path.stat().st_size for path in files):
+            return files
+    raise RuntimeError(f'No valid sparse model at {folder}: missing or empty cameras, images or points3D files. Dense processing stopped; inspect mapping.log.')
+
+
+def validate_sparse_depths(folder, cameras):
+    """Reject geometry that cannot supply per-view depths at MVS float precision."""
+    import numpy as np
+    from scipy.spatial.transform import Rotation
+
+    if len(cameras) < 2:
+        raise RuntimeError(f'Invalid sparse model at {folder}: fewer than two registered images')
+    poses = {}
+    supported = set()
+    for camera in cameras:
+        rotation = Rotation.from_quat([camera[k] for k in ('qx', 'qy', 'qz', 'qw')]).as_matrix()
+        poses[camera['image_id']] = (rotation[2].astype(np.float32), np.float32(camera['tz']))
+    for line in (Path(folder) / 'points3D.txt').read_text().splitlines():
+        if not line.strip() or line.lstrip().startswith('#'):
+            continue
+        fields = line.split()
+        xyz = np.array(fields[1:4], dtype=np.float32)
+        if not np.isfinite(xyz).all():
+            raise RuntimeError(f'Invalid sparse model at {folder}: nonfinite points')
+        for image_id in map(int, fields[8::2]):
+            row, tz = poses[image_id]
+            depth = row @ xyz + tz
+            # Reject cancellation noise, not a scene-scale depth cutoff.
+            roundoff = 8 * np.finfo(np.float32).eps * (np.abs(row * xyz).sum() + abs(tz))
+            if np.isfinite(depth) and depth > roundoff:
+                supported.add(image_id)
+    unsupported = [c['filename'] for c in cameras if c['image_id'] not in supported]
+    if unsupported:
+        raise RuntimeError(f'Invalid sparse model at {folder}: {len(unsupported)} registered images have no numerically reliable positive-depth sparse tracks (including {unsupported[0]}). Geometry is empty or degenerate; dense processing stopped.')
 
 
 class Colmap:

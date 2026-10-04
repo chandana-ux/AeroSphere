@@ -177,6 +177,8 @@ def render_world(root,summary,selection,metadata):
     layer_key = 'world_layer_' + str(root)
     def cloud_changed(label, toggle):
         # Isolate an enabled cloud so the default opaque mesh cannot hide it.
+        if toggle not in st.session_state:
+            return  # Streamlit can dispatch an old callback while removing a page's widgets.
         if st.session_state[toggle]:
             st.session_state[layer_key] = label
         elif st.session_state.get(layer_key) == label:

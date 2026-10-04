@@ -13,7 +13,7 @@ from pathlib import Path
 import sys
 import atexit
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
-from reconstruction_runtime import Colmap, DependencyError, write_json
+from reconstruction_runtime import Colmap, DependencyError, write_json, sparse_model_files, validate_sparse_depths
 
 CURRENT = {}
 
@@ -27,6 +27,8 @@ def progress(stage=None, status=None, error=None):
         CURRENT["stages"][CURRENT["stage"]] = status
     if error:
         CURRENT["error"] = str(error)
+    CURRENT['pid'] = os.getpid()
+    CURRENT['updated_utc'] = datetime.now(timezone.utc).isoformat()
     write_json(Path(CURRENT["project"]) / "reconstruction_progress.json", CURRENT)
 
 
@@ -139,15 +141,15 @@ def main():
     env = cli.env
     executable = cli.executable
 
-    def command(stage, name, options, timeout=1800):
-        if state.get(stage, {}).get('success'):
-            print(f'Reusing {stage}', flush=True)
-            return
+    def command(stage, name, options, timeout=1800, force=False):
         if name != '-h':
             cli.probe(name)
             (logs / (name + '_help.txt')).write_text(cli.help[name], encoding='utf-8')
             options = cli.options(name, list(options) + ['--log_target', 'stderr', '--log_color', '0'])
         cmd = [str(executable), name] + list(map(str, options))
+        if not force and state.get(stage, {}).get('success') and state[stage].get('command') == cmd:
+            print(f'Reusing {stage}', flush=True)
+            return
         CURRENT['command'] = stage
         progress()
         state[stage] = {'success':False, 'status':'processing', 'command':cmd}
@@ -183,16 +185,24 @@ def main():
     command('mapping', 'mapper', ['--database_path', db, '--image_path', images, '--output_path', sparse,
         '--Mapper.num_threads', '4', '--Mapper.ba_use_gpu', '0', '--Mapper.random_seed', '0'])
     models = []
-    for folder in sorted(sparse.iterdir()):
-        if not folder.is_dir() or not (folder / 'images.bin').exists():
+    rejected_models = []
+    for folder in [sparse] + sorted(p for p in sparse.iterdir() if p.is_dir()):
+        if folder == sparse and not any((folder / ('images.' + ext)).exists() for ext in ('bin', 'txt')):
             continue
         txt = run / ('text_' + folder.name)
         txt.mkdir(exist_ok=True)
-        command('convert_' + folder.name, 'model_converter', ['--input_path', folder, '--output_path', txt, '--output_type', 'TXT'])
-        parsed = read_model(txt)
+        try:
+            sparse_model_files(folder)
+            command('convert_' + folder.name, 'model_converter', ['--input_path', folder, '--output_path', txt, '--output_type', 'TXT'], force=True)
+            parsed = read_model(txt)
+            validate_sparse_depths(txt, parsed[0])
+        except (RuntimeError, ValueError, KeyError, OSError) as exc:
+            rejected_models.append(str(exc))
+            print(f'Rejecting sparse component {folder}: {exc}', flush=True)
+            continue
         models.append((len(parsed[0]), len(parsed[1]), folder, txt, parsed))
     if not models:
-        raise RuntimeError('No camera alignment could be recovered. Use a static textured subject, overlapping views and camera translation; avoid pure rotation, moving objects, blur and scene cuts. Inspect mapping.log.')
+        raise RuntimeError('No valid sparse model exists; dense processing stopped. Use a static textured subject, overlapping views and camera translation; avoid pure rotation, moving objects, blur and scene cuts. Inspect mapping.log. ' + ' '.join(rejected_models))
     _, _, model, txt, (cameras, points, errors, tracks) = max(models, key=lambda m: (m[0], m[1]))
     if len(cameras) < 2 or len(points) == 0 or not np.isfinite(points).all():
         raise RuntimeError('Sparse output has insufficient cameras/points or nonfinite coordinates')
@@ -207,7 +217,8 @@ def main():
         pairs = conn.execute('SELECT COUNT(*) FROM two_view_geometries WHERE rows > 0').fetchone()[0]
     summary = dict(status='sparse_success', run_directory=str(run), sparse_model=str(model),
         input_images=image_count, registered_images=len(cameras), sparse_points=len(points),
-        sparse_components=len(models), verified_image_pairs=pairs,
+        sparse_components=len(models) + len(rejected_models), verified_image_pairs=pairs,
+        rejected_sparse_models=rejected_models,
         mean_point_reprojection_error_pixels=float(np.mean(errors)), median_point_reprojection_error_pixels=float(np.median(errors)),
         mean_track_length=float(np.mean(tracks)),
         coordinate_system='Arbitrary COLMAP similarity frame; distances are not metres; not georeferenced.',
@@ -251,8 +262,32 @@ def main():
         progress('dense', 'processing')
         try:
             cli.probe('patch_match_stereo')
+            previous_input = state.get('undistort', {}).get('command', [])
+            try:
+                sparse_model_files(dense / 'sparse')
+                workspace_exists = (dense / 'stereo/patch-match.cfg').is_file()
+            except RuntimeError:
+                workspace_exists = False
+            if not workspace_exists or not state.get('undistort', {}).get('success') or '--input_path' not in previous_input or previous_input[previous_input.index('--input_path') + 1] != str(model):
+                # COLMAP reuses existing depth maps by filename, even for a different
+                # component. Keep the old workspace aside rather than mixing models.
+                if any(dense.iterdir()):
+                    dense.rename(run / f'dense_previous_{time.time_ns()}')
+                    dense.mkdir()
+                for stage in ('undistort', 'stereo', 'fusion', 'mesh'):
+                    state.pop(stage, None)
+                write_json(state_path, state)
             command('undistort', 'image_undistorter', ['--image_path', images, '--input_path', model,
                     '--output_path', dense, '--output_type', 'COLMAP', '--max_image_size', args.dense_size])
+            sparse_model_files(dense / 'sparse')
+            dense_text = run / 'text_dense'
+            dense_text.mkdir(exist_ok=True)
+            command('validate_dense_model', 'model_converter', ['--input_path', dense / 'sparse',
+                    '--output_path', dense_text, '--output_type', 'TXT'], force=True)
+            dense_cameras, dense_points, _, _ = read_model(dense_text)
+            validate_sparse_depths(dense_text, dense_cameras)
+            if {c['filename'] for c in dense_cameras} != {c['filename'] for c in cameras} or len(dense_points) != len(points):
+                raise RuntimeError('Undistorted sparse model does not match the selected mapper model; dense processing stopped. Rerun undistortion in a fresh run.')
             stereo_config = dense / 'stereo/patch-match.cfg'
             if not state.get('stereo', {}).get('success'):
                 lines = stereo_config.read_text().splitlines()

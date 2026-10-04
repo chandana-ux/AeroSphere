@@ -10,10 +10,27 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'app'))
-from reconstruction_runtime import Colmap, DependencyError, find_colmap, write_json
+from reconstruction_runtime import Colmap, DependencyError, find_colmap, write_json, worker_alive
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_worker_liveness_does_not_stop_current_process(self):
+        self.assertTrue(worker_alive(os.getpid()))
+
+    def test_exited_worker_does_not_display_processing_forever(self):
+        from dashboard import live_reconstruction_progress
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            write_json(root/'reconstruction_progress.json', {
+                'status':'processing', 'stage':'sparse', 'stages':{'sparse':'processing'}})
+            (root/'reconstruction.lock').write_text('123')
+            with patch('dashboard.worker_alive', return_value=False):
+                state = live_reconstruction_progress(root)
+                self.assertEqual(state['status'], 'failed')
+                self.assertEqual(state['stages']['sparse'], 'failed')
+            with patch('dashboard.worker_alive', return_value=True):
+                self.assertEqual(live_reconstruction_progress(root)['status'], 'processing')
+
     def test_explicit_bad_path_does_not_silently_select_another_install(self):
         with patch.dict(os.environ, {'AEROSPHERE_COLMAP':str(ROOT/'missing/colmap.exe')}):
             self.assertIsNone(find_colmap())
