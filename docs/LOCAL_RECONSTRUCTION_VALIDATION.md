@@ -1,4 +1,4 @@
-# Local reconstruction validation ? 2026-10-04
+# Local reconstruction validation - 2026-10-04
 
 ## Environment and scope
 
@@ -8,15 +8,26 @@ Real video processing uses OpenCV's FFmpeg decoder, feature detection/matching, 
 
 ## Distinct input videos
 
-- **Sample Video - 1.mp4**: oblique aerial view of buildings and a railway, 720?1280, 60 FPS, 24.0167 seconds. Sampling: 0.5 seconds, cap 40; 40 extracted/selected frames. Job: `results/jobs/validation_video_1`. Final run uses GPU features/matching and automatic camera grouping.
-- **Sample video - 2.mp4**: downward aerial view along a residential street, 720?1280, 60 FPS, 19.2167 seconds. Sampling: 0.75 seconds, cap 24; 24 extracted/selected frames. Job: `results/jobs/validation_video_2_shared`. Uses CPU features/matching and shared intrinsics (`--camera-sharing single`), assuming unchanged lens/zoom.
-- **OpenCV vtest.avi**: fixed-camera outdoor scene with pedestrians, 768?576, 10 FPS, 79.5 seconds. Sampling: 1 second, cap 15; 15 extracted/selected frames. Job: `results/jobs/validation_outdoor_fixed`. Source: [OpenCV official sample](https://github.com/opencv/opencv/blob/4.x/samples/data/vtest.avi). Used to test unsuitable input, not as a positive reconstruction example.
+- **Sample Video - 1.mp4**: oblique aerial view of buildings and a railway, 720x1280, 60 FPS, 24.0167 seconds. Sampling: 0.5 seconds, cap 40; 40 extracted/selected frames. Job: `results/jobs/validation_video_1`. Final run uses GPU features/matching and automatic camera grouping.
+- **Sample video - 2.mp4**: downward aerial view along a residential street, 720x1280, 60 FPS, 19.2167 seconds. Sampling: 0.75 seconds, cap 24; 24 extracted/selected frames. Job: `results/jobs/validation_video_2_shared`. Uses CPU features/matching and shared intrinsics (`--camera-sharing single`), assuming unchanged lens/zoom.
+- **OpenCV vtest.avi**: fixed-camera outdoor scene with pedestrians, 768x576, 10 FPS, 79.5 seconds. Sampling: 1 second, cap 15; 15 extracted/selected frames. Job: `results/jobs/validation_outdoor_fixed`. Source: [OpenCV official sample](https://github.com/opencv/opencv/blob/4.x/samples/data/vtest.avi). Used to test unsuitable input, not as a positive reconstruction example.
 
 The initially discovered third local filename was byte-identical to Sample Video 2 and was excluded. Video SHA-256 values and frame-provenance checks are recorded in `results/local_video_validation.json`.
 
 ## Measured results
 
-Final measured table is generated from the verification report below.
+| Input | Registered | Sparse points | Dense points | Mesh vertices / triangles | Result |
+|---|---:|---:|---:|---:|---|
+| Video 1: buildings/railway | 40/40 | 10,141 | 48,384 | 20,609 / 40,601 | All stages completed |
+| Video 2: residential street | 24/24 | 19,679 | 57,953 | 51,314 / 101,900 | All stages completed |
+| Fixed-camera outdoor | None | None | None | None | Failed honestly; no camera initialization |
+
+Mean reprojection errors: Video 1 **0.4053 px**; Video 2 **0.7850 px**. Each positive dataset passed all eight page checks and all four viewer-mode payload checks. The failed input passed all eight pages without borrowed geometry.
+
+
+## Final regression results
+
+`python -m unittest discover -s scripts -v`: **33 tests run, 29 passed, 4 skipped**. Skips require older prepared-demo artifacts or optional detector weights; they are not counted as passes. `python -m py_compile app/dashboard.py` passed. `pip check` reported no broken requirements. The final real-dataset verifier passed separately for all three distinct videos.
 
 ## What was exercised
 
@@ -52,11 +63,20 @@ Sampling caps truncate long captures. GPU/backend/build support limits dense rec
 - `scripts/extract_video.py`: explicit OpenCV FFmpeg decoder and optional external ffprobe metadata.
 - `app/dashboard.py`: active-dataset guards, background controls, live independent status, retries, relative Geo, geometry Intelligence and missing-artifact handling.
 - `app/world.py`: valid per-dataset geometry, automatic available layer, independent wireframe, honest dense counts and empty/corrupt geometry errors.
+- `app/measure.py`: graceful mesh-measurement fallback when a backend has no exact sparse tracks.
 - `app/mission.py`: dataset-derived names and actual processing status.
 - `app/extras.py`: registration ratio and mesh counts in Quality.
 - `scripts/check_runtime.py` (new), `scripts/test_reconstruction_runtime.py` (new), `scripts/verify_local_datasets.py` (new): diagnostics and regression/real-dataset verification.
-- `requirements.txt`: Open3D pin corrected to the installed/tested Windows 0.19.0 version.
+- `requirements.txt`: Python-version markers select tested local Open3D 0.19.0 for Python <3.13, preserving the existing 0.20.0 cloud pin for newer Python. The cloud deployment was not tested.
 - `.gitignore`: local COLMAP tools excluded.
 - `README.md`, `LOCAL_VIDEO_3D_QUICKSTART.md`, this report: exact installation, run, verification and limitation documentation.
 
 See [the quickstart](../LOCAL_VIDEO_3D_QUICKSTART.md) for complete installation and run commands.
+
+## Git and continuation review
+
+On receiving the continuation summary, the checkout already contained commit `2c07bf9` (`Add local reconstruction runtime and multi-input workflow`) on `initial-prototype`. The local tracking reference showed no divergence at that inspection; no live remote comparison was performed. An untracked nested `AeroSphere/` checkout was present and left untouched. No reset, force push, discard, commit or push was performed by this task.
+
+That commit also introduced `scripts/opencv_sfm.py`, `scripts/mesh_from_cloud.py` and an optional OpenCV backend outside this task's edits. These were preserved. **The OpenCV fallback is experimental and was not validated as a multi-video reconstruction pipeline here.** All positive results above use real COLMAP. The dashboard's normal processing path still requires COLMAP. Compatibility guards now show unavailable reprojection/lineage data instead of assuming every backend provides COLMAP tracks.
+
+The prepared [SIH recording checklist](SIH_LOCAL_DEMO.md) uses only the verified local workflow. Pending final documentation and compatibility fixes should be reviewed before any new commit/push.

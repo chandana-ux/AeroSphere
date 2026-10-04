@@ -18,7 +18,7 @@ def render_extra(page,project,code_root,metadata,selection,summary):
         metrics[0].metric('Registered images',f"{summary['registered_images']} / {summary['input_images']}")
         metrics[1].metric('Sparse points',f"{summary['sparse_points']:,}")
         metrics[2].metric('Dense points',f"{summary['dense_points']:,}" if 'dense_points' in summary else 'Unavailable')
-        metrics[3].metric('Mean reprojection error',f"{summary['mean_point_reprojection_error_pixels']:.3f} px")
+        metrics[3].metric('Mean reprojection error', f"{summary['mean_point_reprojection_error_pixels']:.3f} px" if summary.get('mean_point_reprojection_error_pixels') is not None else 'Unavailable')
         cols = st.columns(3)
         cols[0].metric('Registered image ratio', f"{summary['registered_images']/summary['input_images']:.1%}" if summary.get('input_images') else 'Unavailable')
         cols[1].metric('Mesh vertices', summary.get('mesh_vertices', 'Unavailable'))

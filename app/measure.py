@@ -19,7 +19,10 @@ def render_model_measure(summary):
         return
     ids=list(points)
     if not ids:
-        st.info('Sparse-point measurements are unavailable until the mission has triangulated points.')
+        st.info('Exact sparse-point tracks are unavailable for this backend.')
+        mesh_path = Path(summary['run_directory'])/'dense/mesh.ply'
+        if mesh_path.is_file():
+            render_mesh_measure(mesh_path)
         return
     cols=st.columns(3)
     chosen=[c.selectbox('Point '+label,ids,index=min(i,len(ids)-1),key='measure_'+label) for i,(c,label) in enumerate(zip(cols,['A','B','C']))]

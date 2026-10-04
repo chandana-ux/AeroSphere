@@ -59,7 +59,7 @@ py -3.11 -m venv .venv
 .\run_aerosphere.bat
 ```
 
-Default COLMAP launcher: `%USERPROFILE%\Downloads\colmap-x64-windows-cuda\COLMAP.bat`. CLI `--colmap` overrides it. Dense defaults are bounded for the GTX 1650 Ti 4 GB (1200 px, five stereo iterations, six source views); CPU mode applies only to sparse extraction/matching. Geometry quality and runtime depend on overlap, motion, texture and hardware. Clean installation on another computer remains unverified.
+COLMAP discovery supports `AEROSPHERE_COLMAP`, PATH and `tools/colmap/bin/colmap.exe`; CLI `--colmap` overrides discovery. Dense defaults are bounded for the GTX 1650 Ti 4 GB (800 px, five stereo iterations, six source views); CPU mode applies only to sparse extraction/matching. Geometry quality and runtime depend on overlap, motion, texture and hardware. Clean installation on another computer remains unverified.
 
 The 77-photo CC0 OpenDroneMap Aukerman baseline remains useful for the photo-only regression: https://github.com/OpenDroneMap/odm_data_aukerman . It is separate from the two validated local video datasets. Local inputs and reconstruction outputs are machine-specific and excluded from Git.
 

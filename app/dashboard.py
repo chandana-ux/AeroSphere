@@ -831,6 +831,17 @@ def main():
     elif page == 'INTELLIGENCE':
         left, right = st.columns([3.2, 1.05])
         with left:
+            if summary:
+                render_geometry_summary(summary)
+                try:
+                    if summary.get('sparse_model') and selection.get('source'):
+                        render_lineage(active, summary, selection)
+                    else:
+                        st.info('Exact image lineage requires COLMAP tracks and source-frame metadata; geometry statistics remain available.')
+                except (OSError, ValueError, KeyError, IndexError) as exc:
+                    st.info(f'Sparse observation lineage unavailable: {exc}')
+            else:
+                st.info('Reconstructed spatial insights require geometry for this dataset. Input-derived evidence is shown when available.')
             if selection:
                 quality = input_quality(active, selection)
                 if quality.empty:
@@ -856,14 +867,6 @@ def main():
                     fields = ['selected', 'reason', 'blur_laplacian_variance', 'brightness_mean', 'contrast_std', 'orb_keypoints', 'information_score', 'warnings']
                     st.dataframe(row.reindex(fields).rename('Value').astype(str).replace('nan', 'Unavailable').to_frame(), width='stretch')
                     st.caption('Quality scores and warnings are input-derived heuristics, not detection certainty or reconstruction confidence.')
-                    if summary:
-                        render_geometry_summary(summary)
-                        try:
-                            render_lineage(active, summary, selection)
-                        except (OSError, ValueError, KeyError, IndexError) as exc:
-                            st.info(f'Sparse observation lineage unavailable: {exc}')
-                    else:
-                        st.info('Sparse-point image lineage becomes available after an actual COLMAP reconstruction. No 3D points are inferred from frame-quality scores.')
                     with st.expander('Optional local object predictions'):
                         render_extra('Semantic AI', active, CODE, meta, selection, summary)
             else:

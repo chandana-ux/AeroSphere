@@ -34,6 +34,8 @@ def tracks(path,mtime,point_mtime):
     return load_tracks(path)
 
 def model_tracks(summary):
+    if not summary.get('sparse_model'):
+        return {}, {}
     folder=Path(summary['run_directory'])/('text_'+Path(summary['sparse_model']).name)
     return tracks(str(folder),(folder/'images.txt').stat().st_mtime_ns,(folder/'points3D.txt').stat().st_mtime_ns)
 
@@ -124,6 +126,7 @@ def render_world(root,summary,selection,metadata):
     mesh_vertices = 0
     mesh_triangles = 0
     dense_points_count = 0
+    dense_error = None
     mesh_bounds = None
     mesh_error = None
     if mesh_path.exists():
@@ -152,8 +155,8 @@ def render_world(root,summary,selection,metadata):
             dense_points_count = len(dense_xyz)
             if len(dense_xyz) and mesh_bounds is None:
                 mesh_bounds = (dense_xyz.min(0), dense_xyz.max(0))
-        except Exception:
-            dense_points_count = 0
+        except (OSError, ValueError, RuntimeError) as exc:
+            dense_error = str(exc)
 
     st.markdown(f'''
     <div style="margin: 0 0 0.7rem 0; padding: 0.4rem 0 0.6rem 0; border-bottom: 1px solid rgba(148,177,196,0.18); line-height: 1.35;">
@@ -171,14 +174,22 @@ def render_world(root,summary,selection,metadata):
     if mesh_error:
         with left:
             st.warning(f'Mesh file could not be loaded: {mesh_error}')
+    layer_key = 'world_layer_' + str(root)
+    def cloud_changed(label, toggle):
+        # Isolate an enabled cloud so the default opaque mesh cannot hide it.
+        if st.session_state[toggle]:
+            st.session_state[layer_key] = label
+        elif st.session_state.get(layer_key) == label:
+            st.session_state[layer_key] = 'All enabled'
+
     with right:
         st.markdown('<div class="compact-label">View</div>', unsafe_allow_html=True)
         has_mesh=mesh_path.is_file() and mesh_error is None and mesh_triangles > 0
-        has_dense=dense_path.exists()
+        has_dense=dense_points_count > 0
         has_sparse=(run/'sparse.ply').exists() or bool(points)
         mesh=st.checkbox('Mesh', value=has_mesh, key='world_mesh_toggle', disabled=not has_mesh)
-        dense=st.checkbox('Dense cloud', value=has_dense and not has_mesh, key='world_dense_toggle', disabled=not has_dense)
-        sparse=st.checkbox('Sparse cloud', value=has_sparse and not has_dense and not has_mesh, key='world_sparse_toggle', disabled=not has_sparse)
+        dense=st.checkbox('Dense cloud', value=has_dense and not has_mesh, key='world_dense_toggle', disabled=not has_dense, on_change=cloud_changed, args=('Dense Cloud', 'world_dense_toggle'))
+        sparse=st.checkbox('Sparse cloud', value=has_sparse and not has_dense and not has_mesh, key='world_sparse_toggle', disabled=not has_sparse, on_change=cloud_changed, args=('Sparse Cloud', 'world_sparse_toggle'))
         wire=st.checkbox('Wireframe', value=False, key='world_wireframe_toggle', disabled=not has_mesh)
         st.markdown('<div class="compact-label" style="margin-top:0.7rem;">Overlays</div>', unsafe_allow_html=True)
         show_cameras=st.checkbox('Cameras', value=False, key='world_cameras_toggle', disabled=cameras.empty)
@@ -186,6 +197,8 @@ def render_world(root,summary,selection,metadata):
         for label, available in [('Mesh / Wireframe', has_mesh), ('Dense cloud', has_dense), ('Sparse cloud', has_sparse)]:
             if not available:
                 st.caption(label + ' unavailable for this dataset.')
+        if dense_error:
+            st.warning('Dense cloud could not be read: ' + dense_error)
         if cameras.empty:
             st.caption('Camera trajectory unavailable; the mesh can still be inspected.')
         if 'world_evidence_mode' not in st.session_state:
@@ -193,7 +206,7 @@ def render_world(root,summary,selection,metadata):
         evidence_value = st.session_state.get('world_evidence_mode', 'Normal model')
         evidence = st.radio('Evidence',['Normal model','Evidence View'],index=0 if evidence_value == 'Normal model' else 1,label_visibility='collapsed', key='world_evidence_mode')
         budget=st.select_slider('Point display budget',[10000,30000,60000,100000],value=60000)
-        isolate=st.selectbox('Layer',['All enabled','Mesh','Dense Cloud','Sparse Cloud','Cameras'])
+        isolate=st.selectbox('Layer',['All enabled','Mesh','Dense Cloud','Sparse Cloud','Cameras'], key=layer_key)
         st.markdown('<div class="compact-label" style="margin-top:0.7rem;">Camera</div>', unsafe_allow_html=True)
         if st.button('Fit model', use_container_width=True, key='fit_model_world'):
             st.session_state['world_camera_mode'] = 'fit'
@@ -208,25 +221,31 @@ def render_world(root,summary,selection,metadata):
     if mesh_bounds is not None:
         model_origin = (mesh_bounds[0] + mesh_bounds[1]) / 2.0
     for enabled,label,relative,is_mesh in [(mesh or wire,'Mesh','dense/mesh_display.ply',True),(dense,'Dense Cloud','dense/fused.ply',False),(sparse or evidence=='Evidence View','Sparse Cloud','sparse.ply',False)]:
+        if label in ('Dense Cloud', 'Sparse Cloud') and isolate == label:
+            enabled = True
         if not enabled or isolate not in ('All enabled',label):continue
         path=run/relative
         if label == 'Dense Cloud':path=dense_path
         if is_mesh and not has_mesh:continue
         if is_mesh and not path.exists():path=mesh_path
-        if not path.exists():
-            with left:st.info(label+' is not available for this reconstruction.')
-            continue
-        if is_mesh and mesh_error:
-            continue
-        try:
-            xyz,colors,triangles=geometry(str(path),path.stat().st_mtime_ns,is_mesh)
-        except Exception as exc:
-            with left:st.warning(f'{label} geometry could not be loaded: {type(exc).__name__}: {exc}')
-            continue
+        if label == 'Sparse Cloud' and points:
+            # Text-model tracks are real geometry even if the PLY export is missing.
+            ids = list(points)
+            xyz = np.array([points[i]['xyz'] for i in ids])
+            colors, triangles = np.empty((0, 3)), np.empty((0, 3), int)
+        else:
+            ids = None
+            if not path.exists():
+                with left:st.info(label+' is not available for this reconstruction.')
+                continue
+            if is_mesh and mesh_error:
+                continue
+            try:
+                xyz,colors,triangles=geometry(str(path),path.stat().st_mtime_ns,is_mesh)
+            except Exception as exc:
+                with left:st.warning(f'{label} geometry could not be loaded: {type(exc).__name__}: {exc}')
+                continue
         if not len(xyz):continue
-        if label=='Sparse Cloud' and points:
-            ids=list(points);xyz=np.array([points[i]['xyz'] for i in ids]);colors=np.empty((0,3))
-        else:ids=None
         display_xyz = xyz - model_origin
         print(f'PLOTLY_COORDS={label}: x_range=({float(display_xyz[:,0].min())},{float(display_xyz[:,0].max())}), y_range=({float(display_xyz[:,1].min())},{float(display_xyz[:,1].max())}), z_range=({float(display_xyz[:,2].min())},{float(display_xyz[:,2].max())})')
         all_xyz.append(display_xyz)

@@ -90,6 +90,13 @@ def main():
     atexit.register(lambda: lock.unlink(missing_ok=True))
     CURRENT.update(project=str(project), stage='sparse', stages={'sparse':'processing','dense':'not_started','mesh':'not_started'}, status='processing')
     progress()
+    cli = None
+    if args.backend in ('colmap', 'auto'):
+        try:
+            cli = Colmap(args.colmap)
+        except DependencyError:
+            if args.backend == 'colmap':
+                raise
     images = args.images or Path(json.loads((project / 'results/image_intelligence/latest.json').read_text())['selected_directory'])
     if not images.is_dir():
         raise ValueError(f'Images missing: {images}')
@@ -100,13 +107,6 @@ def main():
     run.mkdir(parents=True, exist_ok=True)
     CURRENT['run_directory'] = str(run)
     progress()
-    cli = None
-    if args.backend in ('colmap', 'auto'):
-        try:
-            cli = Colmap(args.colmap)
-        except DependencyError:
-            if args.backend == 'colmap':
-                raise
     if cli is None:
         from opencv_sfm import run as opencv_run
         print('COLMAP unavailable; running the OpenCV structure-from-motion fallback', flush=True)
