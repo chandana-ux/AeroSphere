@@ -23,10 +23,6 @@ Two sample drone videos are provided for testing the AeroSphere reconstruction w
 
 These samples can be used to demonstrate the workflow from frame selection through 3D reconstruction, mesh generation, and interactive 3D visualization.
 
-These samples can be used to demonstrate the workflow from frame selection through 3D reconstruction and visualization.
-
-> **Note:** The sample videos should be downloaded from the project-provided dataset location before running a reconstruction locally.
-
 ---
 
 ## 🎥 Recorded Video Demo
