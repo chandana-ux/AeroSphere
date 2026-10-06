@@ -14,12 +14,14 @@ AeroSphere is a drone-based 3D reconstruction and spatial intelligence system th
 
 The live deployment provides the AeroSphere interface and interactive 3D visualization using the available demonstration reconstruction.
 
-### 📦 Sample Videos
+### 📦 Sample Datasets
 
-Two sample videos are provided for testing the AeroSphere workflow locally:
+Two sample drone videos are provided for testing the AeroSphere reconstruction workflow locally:
 
-- **Sample Video 1** — `Sample Video - 1.mp4`
-- **Sample Video 2** — `Sample video - 2.mp4`
+- 🎥 **[Sample Video 1](https://drive.google.com/file/d/1AjrKM-jf3pfT0a_jsvbuacKGPw9covfZ/view?usp=sharing)**
+- 🎥 **[Sample Video 2](https://drive.google.com/file/d/17DQ5ATpLaA81MCZtIlJi5qhJi234GP11/view?usp=sharing)**
+
+These samples can be used to demonstrate the workflow from frame selection through 3D reconstruction, mesh generation, and interactive 3D visualization.
 
 These samples can be used to demonstrate the workflow from frame selection through 3D reconstruction and visualization.
 
